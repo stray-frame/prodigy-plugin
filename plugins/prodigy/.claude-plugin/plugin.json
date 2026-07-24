@@ -1,0 +1,23 @@
+{
+  "name": "prodigy",
+  "version": "0.7.0",
+  "description": "Makes progress reporting a side effect of working: session hooks plus in-context one-liners to the Prodigy dashboard. Only reports in repos with a .prodigy.json marker; only one-sentence summaries ever leave your machine.",
+  "author": { "name": "Stray Frame Studio" },
+  "mcpServers": {
+    "prodigy": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/server/index.mjs"],
+      "env": {
+        "PRODIGY_API_TOKEN": "${user_config.api_token}"
+      }
+    }
+  },
+  "userConfig": {
+    "api_token": {
+      "type": "string",
+      "title": "Prodigy API token",
+      "description": "Your personal Prodigy API token — sign in with Discord at prodigy.strayframe.net/connect to mint one",
+      "sensitive": true
+    }
+  }
+}

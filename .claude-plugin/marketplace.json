@@ -1,0 +1,12 @@
+{
+  "name": "stray-frame",
+  "owner": { "name": "Stray Frame Studio" },
+  "description": "Stray Frame Studio plugins for Claude Code.",
+  "plugins": [
+    {
+      "name": "prodigy",
+      "source": "./plugins/prodigy",
+      "description": "Prodigy dashboard reporting — your work shows up on the board automatically. Opt-in per repo via a .prodigy.json marker; only one-sentence summaries ever leave your machine."
+    }
+  ]
+}

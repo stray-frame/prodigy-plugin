@@ -1,0 +1,32 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/report-event.mjs\"",
+            "timeout": 10,
+            "env": {
+              "PRODIGY_API_TOKEN": "${user_config.api_token}"
+            }
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/report-event.mjs\"",
+            "timeout": 10,
+            "env": {
+              "PRODIGY_API_TOKEN": "${user_config.api_token}"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
