@@ -19,6 +19,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 import {
+  TIMEOUT_MS,
   loadRegistry,
   normalizeKey,
   resolveRepo,
@@ -82,7 +83,7 @@ async function api(method, route, body) {
       "Content-Type": "application/json",
     },
     body: body ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(3000),
+    signal: AbortSignal.timeout(TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`Prodigy API ${res.status}`);
   return res.json();
@@ -105,7 +106,7 @@ const TOOLS = [
       token = String(token).trim();
       const res = await fetch(`${API_URL}/api/cc/whoami`, {
         headers: { Authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(3000),
+        signal: AbortSignal.timeout(TIMEOUT_MS),
       });
       if (!res.ok)
         return "That token was not accepted (mistyped, or revoked by a newer mint?) — generate a fresh one at the dashboard's /connect page and paste the new prompt.";

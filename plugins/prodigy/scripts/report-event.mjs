@@ -26,7 +26,13 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
-import { git, readJson, resolveRepo, stripBom } from "../lib/studio-repo.mjs";
+import {
+  TIMEOUT_MS,
+  git,
+  readJson,
+  resolveRepo,
+  stripBom,
+} from "../lib/studio-repo.mjs";
 
 const DEFAULT_URL = "https://prodigy.strayframe.net";
 const DEFAULT_TOKEN = "";
@@ -92,8 +98,9 @@ async function main() {
 
   const isStart = body.type === "session_start";
 
-  // Run together rather than in sequence — the hook has a 10s budget and
-  // the board fetch doesn't depend on the event landing.
+  // Run together rather than in sequence — the hook's budget in hooks.json
+  // has to cover one TIMEOUT_MS, not two, and the board fetch doesn't depend
+  // on the event landing.
   const [, board] = await Promise.all([
     fetch(`${url}/api/cc/events`, {
       method: "POST",
@@ -102,7 +109,7 @@ async function main() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(3000),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
     }).catch(() => null),
     isStart ? fetchOpenCards(url, token) : Promise.resolve(null),
   ]);
@@ -120,7 +127,7 @@ async function fetchOpenCards(url, token) {
   try {
     const res = await fetch(`${url}/api/cc/tasks`, {
       headers: { Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(3000),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     if (!res.ok) return null;
     const { tasks } = await res.json();

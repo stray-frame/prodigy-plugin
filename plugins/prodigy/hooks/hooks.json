@@ -6,7 +6,7 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/report-event.mjs\"",
-            "timeout": 10,
+            "timeout": 20,
             "env": {
               "PRODIGY_API_TOKEN": "${user_config.api_token}"
             }
@@ -20,7 +20,7 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/report-event.mjs\"",
-            "timeout": 10,
+            "timeout": 20,
             "env": {
               "PRODIGY_API_TOKEN": "${user_config.api_token}"
             }

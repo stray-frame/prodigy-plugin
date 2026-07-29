@@ -24,6 +24,20 @@ const CACHE_PATH = path.join(homedir(), ".prodigy", "registry.json");
  *  member one unattributed session, not a broken one. */
 const TTL_MS = 6 * 60 * 60 * 1000;
 
+/**
+ * The request budget for every call the plugin makes, here and in the MCP
+ * server and the hook script.
+ *
+ * The dashboard runs on a Fly machine with min_machines_running = 0, so the
+ * first request after an idle gap waits on a cold boot: ~1.7s for the VM and
+ * ~5s more before Next.js serves, measured from the proxy logs. The budget
+ * used to be 3s, which aborted less than halfway through that — so reports
+ * failed whenever a member happened to be the one who woke the machine, and
+ * succeeded on the retry that followed. Fly's proxy holds the request while
+ * the machine starts, so one patient call rides the boot out.
+ */
+export const TIMEOUT_MS = Number(process.env.PRODIGY_TIMEOUT_MS) || 12_000;
+
 /** Windows editors and PowerShell write UTF-8 with a BOM, which JSON.parse
  *  rejects — strip it wherever we read JSON. */
 export const stripBom = (s) => s.replace(/^﻿/, "");
@@ -85,7 +99,7 @@ function writeCache(registry) {
 
 /** Cached registry, refreshed past the TTL. A failed refresh keeps serving
  *  the stale copy — an offline member should not silently stop reporting. */
-export async function loadRegistry({ url, token, timeoutMs = 2500 } = {}) {
+export async function loadRegistry({ url, token, timeoutMs = TIMEOUT_MS } = {}) {
   const cached = readCache();
   const fresh =
     cached?.fetchedAt && Date.now() - Date.parse(cached.fetchedAt) < TTL_MS;
