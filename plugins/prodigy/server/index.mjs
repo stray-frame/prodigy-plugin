@@ -7,16 +7,23 @@
  * tools/list, tools/call, ping). If a future client version's handshake
  * drifts, swap in @modelcontextprotocol/sdk per docs/production.md.
  *
- * Privacy: write tools refuse in repos without a .prodigy.json marker
- * (second enforcement layer — the hook script is the first). Only
- * one-sentence summaries are ever transmitted.
+ * Privacy: write tools refuse in repos that are not studio projects — a
+ * .prodigy.json marker or a name match against the registry synced for this
+ * member, decided locally (second enforcement layer — the hook script is the
+ * first). Only one-sentence summaries are ever transmitted.
  */
 
 import { createInterface } from "node:readline";
-import { execSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
+
+import {
+  loadRegistry,
+  normalizeKey,
+  resolveRepo,
+  writeMarker,
+} from "../lib/studio-repo.mjs";
 
 const API_URL = clean(process.env.PRODIGY_API_URL) || "https://prodigy.strayframe.net";
 
@@ -49,44 +56,21 @@ function log(...args) {
 
 /* ------------------------------------------------------ repo context */
 
-function git(args) {
-  try {
-    return execSync(`git ${args}`, {
-      timeout: 2000,
-      stdio: ["ignore", "pipe", "ignore"],
-    })
-      .toString()
-      .trim();
-  } catch {
-    return null;
-  }
+/** Resolved once and reused — the registry fetch behind it is cached on
+ *  disk, but there is no reason to redo the git calls per tool call.
+ *  connect_account clears it so a freshly-saved token takes effect. */
+let ctxPromise = null;
+function repoContext() {
+  ctxPromise ??= resolveRepo({
+    cwd: process.cwd(),
+    url: API_URL,
+    token: currentToken(),
+  }).catch(() => ({ studio: false }));
+  return ctxPromise;
 }
-
-const gitRoot = git("rev-parse --show-toplevel");
-let marker = null;
-if (gitRoot) {
-  try {
-    // strip a possible UTF-8 BOM (common from Windows editors/PowerShell)
-    marker = JSON.parse(
-      readFileSync(path.join(gitRoot, ".prodigy.json"), "utf8").replace(
-        /^﻿/,
-        ""
-      )
-    );
-  } catch {
-    marker = null;
-  }
-}
-const optedIn = marker !== null && marker.enabled !== false;
-const repoCtx = {
-  repo: gitRoot ? path.basename(gitRoot) : undefined,
-  branch: git("rev-parse --abbrev-ref HEAD") || undefined,
-  project:
-    optedIn && typeof marker?.project === "string" ? marker.project : undefined,
-};
 
 const NOT_OPTED_IN =
-  "This repo has no .prodigy.json marker, so it's treated as personal — nothing was reported. Studio repos carry the marker; do not try to work around this.";
+  "This repo isn't a studio project — it matched neither a .prodigy.json marker nor the studio registry, so it's treated as personal and nothing was reported. If it IS a studio repo, call link_repo with the project name; otherwise leave it alone rather than working around this.";
 
 /* -------------------------------------------------------------- api */
 
@@ -128,7 +112,53 @@ const TOOLS = [
       const { member } = await res.json();
       mkdirSync(path.dirname(CRED_PATH), { recursive: true });
       writeFileSync(CRED_PATH, JSON.stringify({ token }, null, 2));
+      // The repo context may have resolved to "personal" purely because
+      // there was no token to sync the registry with. Re-resolve.
+      ctxPromise = null;
       return `Connected as ${member} — Prodigy reports from this machine are now attributed to you. Takes effect immediately.`;
+    },
+  },
+  {
+    name: "link_repo",
+    description:
+      "Tell Prodigy which studio project this repo belongs to. Call when the member says something like 'this repo is for Gunship Simulator', or after a write tool reported the repo isn't recognized and the member confirms it IS studio work. Writes the .prodigy.json marker here and registers the repo on the dashboard so teammates who clone it resolve automatically. Never call this to force reporting on a repo the member hasn't confirmed is studio work.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: {
+          type: "string",
+          description: "Studio project name, e.g. 'Gunship Simulator'",
+        },
+      },
+      required: ["project"],
+      additionalProperties: false,
+    },
+    async run({ project }) {
+      const ctx = await repoContext();
+      if (!ctx.gitRoot)
+        return "This folder isn't a git repository, so there's nothing to link — Prodigy identifies repos by their git root.";
+
+      // Match against the real roster rather than trusting the string: a
+      // typo would otherwise open a project nobody is looking at.
+      const registry = await loadRegistry({
+        url: API_URL,
+        token: currentToken(),
+      });
+      const roster = registry?.projects ?? [];
+      const matched = roster.find(
+        (p) => normalizeKey(p) === normalizeKey(String(project))
+      );
+      if (!matched) {
+        return roster.length
+          ? `No studio project matches "${project}". Current projects: ${roster.join(", ")}. Ask the member which one, then call link_repo again.`
+          : `Could not reach the dashboard to check the project list, so nothing was linked. Try again once it's back.`;
+      }
+
+      await api("POST", "/api/cc/registry", { repo: ctx.repo, project: matched });
+      const file = writeMarker(ctx.gitRoot, matched);
+      ctxPromise = null;
+
+      return `Linked ${ctx.repo} to ${matched}. Wrote ${path.basename(file)} at the repo root — commit it so the whole team is covered even before the registry syncs. Reporting works from here on.`;
     },
   },
   {
@@ -182,11 +212,12 @@ const TOOLS = [
       additionalProperties: false,
     },
     async run({ title, project, due, points }) {
-      if (!optedIn) return NOT_OPTED_IN;
+      const ctx = await repoContext();
+      if (!ctx.studio) return NOT_OPTED_IN;
       const { task } = await api("POST", "/api/cc/tasks", {
         title: String(title).slice(0, 140),
-        project: project ?? repoCtx.project,
-        repo: repoCtx.repo,
+        project: project ?? ctx.project,
+        repo: ctx.repo,
         dueIso: due,
         points,
       });
@@ -204,7 +235,8 @@ const TOOLS = [
       additionalProperties: false,
     },
     async run({ taskId }) {
-      if (!optedIn) return NOT_OPTED_IN;
+      const ctx = await repoContext();
+      if (!ctx.studio) return NOT_OPTED_IN;
       const { task } = await api("POST", "/api/cc/start", { taskId });
       return `Started: ${task.title} — the card moved to In progress.`;
     },
@@ -224,14 +256,15 @@ const TOOLS = [
       additionalProperties: false,
     },
     async run({ summary, project, taskId }) {
-      if (!optedIn) return NOT_OPTED_IN;
+      const ctx = await repoContext();
+      if (!ctx.studio) return NOT_OPTED_IN;
       await api("POST", "/api/cc/events", {
         type: "progress",
         summary: String(summary).slice(0, 140),
-        project: project ?? repoCtx.project,
+        project: project ?? ctx.project,
         taskId,
-        repo: repoCtx.repo,
-        branch: repoCtx.branch,
+        repo: ctx.repo,
+        branch: ctx.branch,
         source: "mcp",
       });
       return "Progress reported to the Prodigy dashboard.";
@@ -251,7 +284,8 @@ const TOOLS = [
       additionalProperties: false,
     },
     async run({ taskId, summary }) {
-      if (!optedIn) return NOT_OPTED_IN;
+      const ctx = await repoContext();
+      if (!ctx.studio) return NOT_OPTED_IN;
       const { task, pending } = await api("POST", "/api/cc/complete", {
         taskId,
         summary,
@@ -335,6 +369,8 @@ rl.on("line", async (line) => {
   }
 });
 
-log(
-  `ready · repo=${repoCtx.repo ?? "none"} · optedIn=${optedIn} · project=${repoCtx.project ?? "-"}`
+repoContext().then((ctx) =>
+  log(
+    `ready · repo=${ctx.repo ?? "none"} · studio=${ctx.studio} · project=${ctx.project ?? "-"}${ctx.source ? ` (${ctx.source})` : ""}`
+  )
 );

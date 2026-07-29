@@ -2,9 +2,12 @@
 /**
  * Prodigy session reporter — runs on SessionStart / SessionEnd.
  *
- * Privacy contract (enforced HERE, before any network call):
- *  - Only reports in repos that carry a .prodigy.json marker at the git
- *    root (project-level opt-in). No marker → exit silently, zero traffic.
+ * Privacy contract (enforced HERE, before anything about this repo is sent):
+ *  - Only reports in studio repos — either a .prodigy.json marker at the git
+ *    root, or a name match against the registry synced from the dashboard.
+ *    The registry is a plain list fetched for this member and matched
+ *    locally; a personal repo never appears in a request. No match → exit
+ *    silently.
  *  - Sends metadata only: event type, session id, repo name, branch,
  *    git email, project. Never code, never transcripts.
  *
@@ -13,35 +16,17 @@
  * (SessionStart stdout is injected into the model's context).
  */
 
-import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
+
+import { git, readJson, resolveRepo, stripBom } from "../lib/studio-repo.mjs";
 
 const DEFAULT_URL = "https://prodigy.strayframe.net";
 const DEFAULT_TOKEN = "";
 
 /** Written by the MCP server's connect_account tool. */
 const CRED_PATH = path.join(homedir(), ".prodigy", "credentials.json");
-
-/** Windows editors and PowerShell often write UTF-8 with a BOM, which
- *  JSON.parse rejects — strip it wherever we read JSON. */
-const stripBom = (s) => s.replace(/^﻿/, "");
-const readJson = (file) => JSON.parse(stripBom(readFileSync(file, "utf8")));
-
-function git(cwd, args) {
-  try {
-    return execSync(`git ${args}`, {
-      cwd,
-      timeout: 2000,
-      stdio: ["ignore", "pipe", "ignore"],
-    })
-      .toString()
-      .trim();
-  } catch {
-    return null;
-  }
-}
 
 function loadConfig() {
   // Layered: credentials file (newest explicit action, from the /connect
@@ -76,16 +61,14 @@ async function main() {
   const payload = JSON.parse(stripBom(readFileSync(0, "utf8")));
   const cwd = payload.cwd || process.cwd();
 
-  // ---- opt-in gate: no marker, no traffic --------------------------------
-  const gitRoot = git(cwd, "rev-parse --show-toplevel");
-  if (!gitRoot) return; // not a git repo → personal by definition
-  let marker;
-  try {
-    marker = readJson(path.join(gitRoot, ".prodigy.json"));
-  } catch {
-    return; // no marker → personal repo → report nothing
-  }
-  if (marker.enabled === false) return;
+  // Loaded before the gate now: deciding whether this is a studio repo can
+  // need the registry, which is fetched for this member and carries nothing
+  // about the repo either way.
+  const { url, token } = loadConfig();
+
+  // ---- opt-in gate: not a studio repo, no traffic ------------------------
+  const ctx = await resolveRepo({ cwd, url, token });
+  if (!ctx.studio) return;
 
   // ---- gather metadata ---------------------------------------------------
   const body = {
@@ -94,14 +77,13 @@ async function main() {
         ? "session_start"
         : "session_end",
     sessionId: payload.session_id,
-    repo: path.basename(gitRoot),
-    branch: git(cwd, "rev-parse --abbrev-ref HEAD") || undefined,
+    repo: ctx.repo,
+    branch: ctx.branch,
     gitEmail: git(cwd, "config user.email") || undefined,
-    project: typeof marker.project === "string" ? marker.project : undefined,
+    project: ctx.project,
     source: "hook",
   };
 
-  const { url, token } = loadConfig();
   await fetch(`${url}/api/cc/events`, {
     method: "POST",
     headers: {

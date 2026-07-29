@@ -5,9 +5,10 @@ description: Report studio work to the Prodigy dashboard as you go. Use after co
 
 # Reporting progress to Prodigy
 
-This repo is a studio project (it has a `.prodigy.json` marker). The studio's
-dashboard stays current because Claude reports progress as a side effect of
-working — the member never fills out a form.
+The studio's dashboard stays current because Claude reports progress as a
+side effect of working — the member never fills out a form. Whether this repo
+counts as studio work is the tools' call, not yours: they resolve it from a
+`.prodigy.json` marker or the studio registry before anything is sent.
 
 ## When to report
 
@@ -33,7 +34,9 @@ good commit subject: what changed and where it stands.
 
 - Only the one-sentence summary leaves the machine. Never include code,
   transcripts, credentials, file contents, or anything personal.
-- If the current repo has no `.prodigy.json`, do not report at all — the
-  tools will refuse, and you must not try to work around that.
+- If a tool reports the repo isn't a studio project, do not work around it.
+  Ask the member whether it is studio work; only if they confirm, call
+  `link_repo` with the project name. Never guess a project to force a report
+  through.
 - Reporting must never interrupt the member's flow: report silently after
   your work message — no ceremony, no asking permission each time.

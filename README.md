@@ -19,9 +19,16 @@ paste it into Claude Code. That's it.
 
 ## Privacy model
 
-- **Opt-in per project.** The plugin only reports in repos that contain a
-  `.prodigy.json` marker at the git root. Repos without one never send
-  anything — the check runs on your machine before any network call.
+- **Opt-in per project.** The plugin only reports in studio repos. A repo
+  counts as studio if it carries a `.prodigy.json` marker at the git root, or
+  if its name matches the studio project registry. The registry is a plain
+  list synced for your account and matched **on your machine** — deciding
+  "studio or personal?" never sends the repo name anywhere, so personal repos
+  still appear in no request. To force a repo personal regardless of its name,
+  commit a marker containing `{ "enabled": false }`.
+- **Nothing hand-written.** If a studio repo isn't recognized, tell Claude
+  "this repo is for &lt;project&gt;" — the `link_repo` tool writes the marker
+  and registers the repo so teammates who clone it resolve automatically.
 - **One sentence, nothing else.** Only short, commit-message-style summaries
   and basic metadata (repo name, branch, duration, project) leave your
   machine. Never code, never transcripts, never file contents. The API has
