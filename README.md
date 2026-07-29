@@ -37,6 +37,9 @@ paste it into Claude Code. That's it.
 ## What you get
 
 - **Automatic session records** — start/end/duration, via session hooks.
+- **Your board, at the top of every session** — open cards are read into
+  context on SessionStart, so work gets matched to a card without anyone
+  having to go looking for one.
 - **Ambient progress** — when meaningful work lands, a one-line update posts
   and matching task cards move on the board.
 - **/prodigy:standup** — today's plan and where to start.
