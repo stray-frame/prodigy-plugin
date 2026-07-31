@@ -174,7 +174,7 @@ const TOOLS = [
       return open
         .map(
           (t) =>
-            `- [${t.id}] ${t.title} · ${t.project} · ${t.status}${t.due ? ` · due ${t.due}` : ""}${t.points ? ` · ${t.points} pt` : ""}`
+            `- [${t.id}] ${t.title} · ${t.project} · ${t.status}${t.due ? ` · due ${t.due}` : ""}${t.points ? ` · ${t.points} pt` : ""}${t.skills?.length ? ` · ${t.skills[0].skill}` : ""}`
         )
         .join("\n");
     },
@@ -196,7 +196,7 @@ const TOOLS = [
   {
     name: "add_task",
     description:
-      "Queue a new task on the member's Prodigy board (To do lane). Call when the user asks to track, queue, or remember work for later — or when a session surfaces follow-up work worth a card. Title reads like a good ticket name; never include code, paths, or secrets. Estimate story points from the title and context — 1: trivial tweak (<30 min); 2: small, well-understood change; 3: a typical half-day task; 5: large multi-part work; 8: major feature or unfamiliar territory. Always pass your estimate; the member can adjust it on the dashboard. When unsure between two sizes, pick the larger.",
+      "Queue a new task on the member's Prodigy board (To do lane). Call when the user asks to track, queue, or remember work for later — or when a session surfaces follow-up work worth a card. Title reads like a good ticket name; never include code, paths, or secrets. Estimate story points from the title and context — 1: trivial tweak (<30 min); 2: small, well-understood change; 3: a typical half-day task; 5: large multi-part work; 8: major feature or unfamiliar territory. Always pass your estimate; the member can adjust it on the dashboard. When unsure between two sizes, pick the larger. Also classify the task into ONE studio discipline — game_design, level_design, programming, ux_ui, art_3d, vfx, audio, production — the area the work mostly lives in (a dashboard tweak is ux_ui or programming, a blockout is level_design). Always pass your pick; the member can adjust it until the card is done. Approved points level that discipline on the member's skill profile and feed their Design/Tech core stats.",
     inputSchema: {
       type: "object",
       properties: {
@@ -208,11 +208,26 @@ const TOOLS = [
           enum: [1, 2, 3, 5, 8],
           description: "Story-point estimate — always provide one",
         },
+        skill: {
+          type: "string",
+          enum: [
+            "game_design",
+            "level_design",
+            "programming",
+            "ux_ui",
+            "art_3d",
+            "vfx",
+            "audio",
+            "production",
+          ],
+          description:
+            "The discipline this work levels up — always provide one",
+        },
       },
       required: ["title"],
       additionalProperties: false,
     },
-    async run({ title, project, due, points }) {
+    async run({ title, project, due, points, skill }) {
       const ctx = await repoContext();
       if (!ctx.studio) return NOT_OPTED_IN;
       const { task } = await api("POST", "/api/cc/tasks", {
@@ -221,8 +236,12 @@ const TOOLS = [
         repo: ctx.repo,
         dueIso: due,
         points,
+        // the API stores a weighted split; a single pick is 100% of it —
+        // the area's fixed Design/Tech ratio does the rest (GDT-style)
+        skills: skill ? [{ skill, pct: 100 }] : undefined,
       });
-      return `Queued: ${task.title} — card added to To do${task.due ? ` (due ${task.due})` : ""} · ${task.points} pt.`;
+      const picked = task.skills?.[0]?.skill;
+      return `Queued: ${task.title} — card added to To do${task.due ? ` (due ${task.due})` : ""} · ${task.points} pt${picked ? ` · ${picked}` : ""}.`;
     },
   },
   {
@@ -327,7 +346,7 @@ rl.on("line", async (line) => {
         reply(id, {
           protocolVersion: params?.protocolVersion ?? "2024-11-05",
           capabilities: { tools: {} },
-          serverInfo: { name: "prodigy", version: "0.4.0" },
+          serverInfo: { name: "prodigy", version: "0.5.0" },
         });
         break;
       case "notifications/initialized":

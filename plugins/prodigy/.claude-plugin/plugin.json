@@ -1,6 +1,6 @@
 {
   "name": "prodigy",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Makes progress reporting a side effect of working: session hooks plus in-context one-liners to the Prodigy dashboard. Only reports in studio repos, recognized on your machine rather than by sending the repo name; only one-sentence summaries ever leave it.",
   "author": { "name": "Stray Frame Studio" },
   "mcpServers": {
