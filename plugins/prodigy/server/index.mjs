@@ -247,7 +247,7 @@ const TOOLS = [
   {
     name: "start_task",
     description:
-      "Mark a Prodigy task as in progress. Call as soon as you begin working on something that matches an open task — this moves the card to the In-progress lane on the studio dashboard.",
+      "Mark a Prodigy task as in progress. Call as soon as you begin working on something that matches an open task — this moves the card to the In-progress lane on the studio dashboard, and clocks the member into that project on Discord if they weren't already working.",
     inputSchema: {
       type: "object",
       properties: { taskId: { type: "string" } },
@@ -257,8 +257,79 @@ const TOOLS = [
     async run({ taskId }) {
       const ctx = await repoContext();
       if (!ctx.studio) return NOT_OPTED_IN;
-      const { task } = await api("POST", "/api/cc/start", { taskId });
-      return `Started: ${task.title} — the card moved to In progress.`;
+      const { task, clock } = await api("POST", "/api/cc/start", { taskId });
+      // clock.message already states plainly what happened to the Discord
+      // session — including that nothing did. Pass it through rather than
+      // re-deriving it, so the model never reports a clock-in that was
+      // actually skipped.
+      return `Started: ${task.title} — the card moved to In progress.${clock?.message ? ` ${clock.message}` : ""}`;
+    },
+  },
+  {
+    name: "edit_task",
+    description:
+      "Fix the title of one of the member's existing cards. Call when they say a card is worded wrong, has a typo, or should read differently — not to re-scope work, which is a new card. Title only: project, due date and skill classification are deliberately not editable here. A card that is already Done is frozen and cannot be retitled.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "string" },
+        title: { type: "string", description: "New title, ≤140 chars" },
+      },
+      required: ["taskId", "title"],
+      additionalProperties: false,
+    },
+    async run({ taskId, title }) {
+      const ctx = await repoContext();
+      if (!ctx.studio) return NOT_OPTED_IN;
+      const { task } = await api("PATCH", "/api/cc/tasks", {
+        taskId,
+        title: String(title).slice(0, 140),
+      });
+      return `Renamed: the card now reads "${task.title}".`;
+    },
+  },
+  {
+    name: "delete_task",
+    description:
+      "Remove one of the member's cards from the board. ASK THE MEMBER FIRST and only call once they have said yes — never infer a delete from a card merely looking stale, duplicated, or obsolete. The card is archived rather than destroyed, so points already approved for it stay on the ledger, but points still awaiting a manager's approval are given up. If the member only wants the card out of the way for now, move_task back to todo instead.",
+    inputSchema: {
+      type: "object",
+      properties: { taskId: { type: "string" } },
+      required: ["taskId"],
+      additionalProperties: false,
+    },
+    async run({ taskId }) {
+      const ctx = await repoContext();
+      if (!ctx.studio) return NOT_OPTED_IN;
+      const { task, withdrawn } = await api("DELETE", "/api/cc/tasks", {
+        taskId,
+      });
+      return `Deleted: "${task.title}" is off the board${withdrawn ? ` — ${withdrawn} pt that was awaiting approval has been withdrawn` : ""}.`;
+    },
+  },
+  {
+    name: "move_task",
+    description:
+      "Move one of the member's cards between the To-do and In-progress lanes. Call when work on a card stops and it should go back to To do, or when a card needs to be put back after being started by mistake. To mark work finished use complete_task instead — that is the only path to Done, because it carries the completion summary and the points award.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "string" },
+        status: {
+          type: "string",
+          enum: ["todo", "in_progress"],
+          description: "Lane to move the card to",
+        },
+      },
+      required: ["taskId", "status"],
+      additionalProperties: false,
+    },
+    async run({ taskId, status }) {
+      const ctx = await repoContext();
+      if (!ctx.studio) return NOT_OPTED_IN;
+      const { task } = await api("POST", "/api/cc/move", { taskId, status });
+      const lane = task.status === "todo" ? "To do" : "In progress";
+      return `Moved: "${task.title}" is now in ${lane}.`;
     },
   },
   {
@@ -346,7 +417,9 @@ rl.on("line", async (line) => {
         reply(id, {
           protocolVersion: params?.protocolVersion ?? "2024-11-05",
           capabilities: { tools: {} },
-          serverInfo: { name: "prodigy", version: "0.5.0" },
+          // Keep in step with .claude-plugin/plugin.json — it drifted to
+          // 0.5.0 once and made version reports useless for debugging.
+          serverInfo: { name: "prodigy", version: "0.12.0" },
         });
         break;
       case "notifications/initialized":

@@ -22,6 +22,21 @@ counts as studio work is the tools' call, not yours: they resolve it from a
 - The user asks to track/queue work for later, or the session surfaces
   follow-up work worth a card: call `add_task` with a ticket-style title.
 
+## Fixing the board
+
+The member owns their cards and can change their mind. These three are for
+when they say so — not for tidying the board on your own initiative.
+
+- Card is worded wrong: `edit_task` with a new title. Title only, and only
+  while the card is still open; a Done card is frozen. Re-scoped work is a
+  new card, not a rename.
+- Work stopped and the card should go back: `move_task` with `todo`. Use this
+  rather than deleting when the work is merely paused. `complete_task` stays
+  the only way to Done.
+- Card should be gone: `delete_task` — but **ask the member first and wait for
+  a yes.** A card looking stale, duplicated, or obsolete to you is not
+  consent. Deleting gives up any points still awaiting a manager's approval.
+
 ## How to report
 
 Call `report_progress` with ONE plain sentence (≤140 chars), written like a

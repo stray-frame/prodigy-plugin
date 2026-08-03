@@ -27,7 +27,8 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 import {
-  TIMEOUT_MS,
+  budget,
+  closeConnections,
   git,
   readJson,
   resolveRepo,
@@ -101,6 +102,7 @@ async function main() {
   // Run together rather than in sequence — the hook's budget in hooks.json
   // has to cover one TIMEOUT_MS, not two, and the board fetch doesn't depend
   // on the event landing.
+  const { signal, done } = budget();
   const [, board] = await Promise.all([
     fetch(`${url}/api/cc/events`, {
       method: "POST",
@@ -109,10 +111,10 @@ async function main() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal,
     }).catch(() => null),
     isStart ? fetchOpenCards(url, token) : Promise.resolve(null),
-  ]);
+  ]).finally(done);
 
   // SessionStart stdout is injected into the model's context. Without this
   // a session begins blind to the board: cards created on the dashboard are
@@ -124,10 +126,11 @@ async function main() {
 }
 
 async function fetchOpenCards(url, token) {
+  const { signal, done } = budget();
   try {
     const res = await fetch(`${url}/api/cc/tasks`, {
       headers: { Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal,
     });
     if (!res.ok) return null;
     const { tasks } = await res.json();
@@ -136,6 +139,8 @@ async function fetchOpenCards(url, token) {
       : null;
   } catch {
     return null; // a quiet start beats a broken one
+  } finally {
+    done();
   }
 }
 
@@ -168,6 +173,22 @@ function renderBoard(cards, project) {
     .join("\n");
 }
 
+/**
+ * Exit cleanly rather than with process.exit().
+ *
+ * This used to be `.finally(() => process.exit(0))`, which on Node 24 /
+ * Windows aborted the process every single run:
+ *   Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), src\win\async.c:76
+ * Claude Code surfaced that as a SessionStart hook error on every session.
+ * The hard exit was there because undici's keep-alive sockets hold the loop
+ * open for seconds after the last response; closeConnections() removes that
+ * reason, so the loop can simply drain. Nothing here may exit non-zero — the
+ * failure contract at the top of this file is that a broken dashboard can
+ * never break the member's session.
+ */
 main()
   .catch(() => {})
-  .finally(() => process.exit(0));
+  .finally(async () => {
+    await closeConnections();
+    process.exitCode = 0;
+  });

@@ -38,6 +38,38 @@ const TTL_MS = 6 * 60 * 60 * 1000;
  */
 export const TIMEOUT_MS = Number(process.env.PRODIGY_TIMEOUT_MS) || 12_000;
 
+/**
+ * A request budget that does not outlive the request.
+ *
+ * AbortSignal.timeout() arms a timer for the full budget and there is no way
+ * to cancel it — so a 200ms fetch against a 12s budget leaves ~11.8s of timer
+ * holding the event loop open. The hook script papered over that with
+ * process.exit(), which is what produced the Windows libuv assertion
+ * (`!(handle->flags & UV_HANDLE_CLOSING)`, src\win\async.c:76) on Node 24:
+ * exiting while libuv still had live handles to tear down.
+ *
+ * Returns the signal plus a `done()` the caller MUST call in a finally.
+ */
+export function budget(ms = TIMEOUT_MS) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), ms);
+  timer.unref?.(); // never the reason the process is still alive
+  return { signal: ac.signal, done: () => clearTimeout(timer) };
+}
+
+/** Undici pools keep sockets alive for ~4s after the last response, which
+ *  keeps a short-lived script running long after its work is done. Closing
+ *  the global dispatcher lets the loop drain immediately — the supported
+ *  alternative to a hard process.exit(). The symbol is undici-internal but
+ *  stable across 5–7; if it ever moves, we just exit a few seconds later. */
+export async function closeConnections() {
+  try {
+    await globalThis[Symbol.for("undici.globalDispatcher.1")]?.close?.();
+  } catch {
+    // nothing to close, or a shape we don't recognize — harmless
+  }
+}
+
 /** Windows editors and PowerShell write UTF-8 with a BOM, which JSON.parse
  *  rejects — strip it wherever we read JSON. */
 export const stripBom = (s) => s.replace(/^﻿/, "");
@@ -106,10 +138,11 @@ export async function loadRegistry({ url, token, timeoutMs = TIMEOUT_MS } = {}) 
   if (fresh) return cached;
   if (!url || !token) return cached;
 
+  const { signal, done } = budget(timeoutMs);
   try {
     const res = await fetch(`${url}/api/cc/registry`, {
       headers: { Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(timeoutMs),
+      signal,
     });
     if (!res.ok) return cached;
     const body = await res.json();
@@ -122,6 +155,8 @@ export async function loadRegistry({ url, token, timeoutMs = TIMEOUT_MS } = {}) 
     return registry;
   } catch {
     return cached;
+  } finally {
+    done();
   }
 }
 
