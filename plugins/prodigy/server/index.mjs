@@ -57,8 +57,13 @@ function log(...args) {
 
 /* ------------------------------------------------------ repo context */
 
-/** Resolved once and reused — the registry fetch behind it is cached on
- *  disk, but there is no reason to redo the git calls per tool call.
+/** A positive answer ("this is studio project X") is resolved once and
+ *  reused — the registry fetch behind it is cached on disk, and there is no
+ *  reason to redo the git calls per tool call. A negative answer is NOT
+ *  kept: the server starts with the session, before the member has had a
+ *  chance to `git init` or write a marker, and a memoized "not a git
+ *  repository" made link_repo refuse for the rest of the session until
+ *  someone reconnected. Re-resolving costs two git calls, which is nothing.
  *  connect_account clears it so a freshly-saved token takes effect. */
 let ctxPromise = null;
 function repoContext() {
@@ -66,7 +71,12 @@ function repoContext() {
     cwd: process.cwd(),
     url: API_URL,
     token: currentToken(),
-  }).catch(() => ({ studio: false }));
+  })
+    .catch(() => ({ studio: false }))
+    .then((ctx) => {
+      if (!ctx.studio) ctxPromise = null;
+      return ctx;
+    });
   return ctxPromise;
 }
 
