@@ -95,8 +95,91 @@ async function api(method, route, body) {
     body: body ? JSON.stringify(body) : undefined,
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
-  if (!res.ok) throw new Error(`Prodigy API ${res.status}`);
+  if (!res.ok) {
+    // Keep the dashboard's own error code on the throw: assign_task turns
+    // "target_not_on_project" into a sentence the member can act on, where
+    // a bare status would only say "403".
+    const err = new Error(`Prodigy API ${res.status}`);
+    err.status = res.status;
+    err.code = await res
+      .json()
+      .then((b) => b?.error)
+      .catch(() => undefined);
+    throw err;
+  }
   return res.json();
+}
+
+/* -------------------------------------------------- name resolution */
+
+/**
+ * Match a name the member SAID ("Lejam") against the people the dashboard
+ * says they may assign to, the way link_repo matches a project name against
+ * the registry. The write side takes a store key, and a typo would
+ * otherwise 422 with nothing to go on.
+ *
+ * Exact match on either the store key or the display alias wins; failing
+ * that, a name that starts one candidate and only one. Anything looser is a
+ * question for the member — a card landing on the wrong board is worse than
+ * asking.
+ */
+function matchAssignee(name, candidates) {
+  const key = normalizeKey(String(name));
+  if (!key) return { kind: "none" };
+  const keysOf = (c) => [normalizeKey(c.member), normalizeKey(c.displayName)];
+  const exact = candidates.filter((c) => keysOf(c).includes(key));
+  if (exact.length === 1) return { kind: "one", who: exact[0] };
+  if (exact.length > 1) return { kind: "many", who: exact };
+  const partial = candidates.filter((c) =>
+    keysOf(c).some((k) => k.startsWith(key))
+  );
+  if (partial.length === 1) return { kind: "one", who: partial[0] };
+  if (partial.length > 1) return { kind: "many", who: partial };
+  return { kind: "none" };
+}
+
+const nameOf = (c) => c.displayName || c.member;
+
+/** GET /api/cc/assignees, then match. Returns either { who } or a
+ *  ready-to-return sentence for the member. */
+async function resolveAssignee(name, query) {
+  const { task, project, viewerMember, assignable } = await api(
+    "GET",
+    `/api/cc/assignees?${query}`
+  );
+  const others = assignable.filter((c) => c.member !== viewerMember);
+  const match = matchAssignee(name, assignable);
+  if (match.kind === "one") return { who: match.who, task, project };
+  if (match.kind === "many") {
+    return {
+      text: `"${name}" could be any of ${match.who.map(nameOf).join(", ")} — ask the member which one, then call again with the full name.`,
+    };
+  }
+  const where = task ? task.project : project;
+  return {
+    text: others.length
+      ? `Nobody you can assign to on ${where} matches "${name}". People you can hand work to there: ${others.map(nameOf).join(", ")}. If they meant one of these, call again with that name; if the person is on the team but missing here, their Discord role isn't on the project yet.`
+      : `There's nobody you can assign to on ${where} — assignment is a team gesture, so both of you need the project's Discord role (managers can assign to anyone). Nothing was changed.`,
+  };
+}
+
+/** The dashboard's error codes for an assignment, as sentences. */
+function assignFailure(err, who) {
+  switch (err.code) {
+    case "target_not_on_project":
+      return `${nameOf(who)} isn't on that project's team, so the card can't go to them — a manager can still assign it, or their Discord role needs adding first. Nothing was changed.`;
+    case "not_on_project":
+    case "unknown_task":
+      return "That card isn't one you can hand over — either the id is wrong, or the project isn't one your Discord roles put you on. Nothing was changed.";
+    case "unknown_member":
+      return `${nameOf(who)} isn't on the studio roster any more, so the card stayed where it was.`;
+    case "task_done":
+      return "That card is already Done, and finished cards are frozen — reassigning it would move credit after the fact. Nothing was changed.";
+    case "roles_unavailable":
+      return "Discord didn't answer when checking project roles, so the assignment was refused rather than guessed. Try again in a moment.";
+    default:
+      return null;
+  }
 }
 
 /* ------------------------------------------------------------- tools */
@@ -233,25 +316,57 @@ const TOOLS = [
           description:
             "The discipline this work levels up — always provide one",
         },
+        assignee: {
+          type: "string",
+          description:
+            "Optional: file the card on a teammate's board instead of the member's own — the name as the member said it (e.g. 'Lejam'). Only when they explicitly asked for it to go to someone else.",
+        },
       },
       required: ["title"],
       additionalProperties: false,
     },
-    async run({ title, project, due, points, skill }) {
+    async run({ title, project, due, points, skill, assignee }) {
       const ctx = await repoContext();
       if (!ctx.studio) return NOT_OPTED_IN;
-      const { task } = await api("POST", "/api/cc/tasks", {
-        title: String(title).slice(0, 140),
-        project: project ?? ctx.project,
-        repo: ctx.repo,
-        dueIso: due,
-        points,
-        // the API stores a weighted split; a single pick is 100% of it —
-        // the area's fixed Design/Tech ratio does the rest (GDT-style)
-        skills: skill ? [{ skill, pct: 100 }] : undefined,
-      });
+      const landing = project ?? ctx.project;
+
+      // Resolve the name BEFORE filing so a typo never queues a card on the
+      // member's own board by accident.
+      let who;
+      if (assignee) {
+        if (!landing)
+          return "A card for someone else needs a project so the right team can be checked — pass one, or link this repo first.";
+        const resolved = await resolveAssignee(
+          assignee,
+          `project=${encodeURIComponent(landing)}`
+        );
+        if (resolved.text) return resolved.text;
+        who = resolved.who;
+      }
+
+      let task;
+      try {
+        ({ task } = await api("POST", "/api/cc/tasks", {
+          title: String(title).slice(0, 140),
+          project: landing,
+          repo: ctx.repo,
+          dueIso: due,
+          points,
+          // the API stores a weighted split; a single pick is 100% of it —
+          // the area's fixed Design/Tech ratio does the rest (GDT-style)
+          skills: skill ? [{ skill, pct: 100 }] : undefined,
+          member: who?.member,
+        }));
+      } catch (err) {
+        const said = who && assignFailure(err, who);
+        if (said) return said;
+        throw err;
+      }
       const picked = task.skills?.[0]?.skill;
-      return `Queued: ${task.title} — card added to To do${task.due ? ` (due ${task.due})` : ""} · ${task.points} pt${picked ? ` · ${picked}` : ""}.`;
+      const lane = who
+        ? `card added to ${nameOf(who)}'s To do (they've been told on Discord)`
+        : "card added to To do";
+      return `Queued: ${task.title} — ${lane}${task.due ? ` (due ${task.due})` : ""} · ${task.points} pt${picked ? ` · ${picked}` : ""}.`;
     },
   },
   {
@@ -296,6 +411,53 @@ const TOOLS = [
         title: String(title).slice(0, 140),
       });
       return `Renamed: the card now reads "${task.title}".`;
+    },
+  },
+  {
+    name: "assign_task",
+    description:
+      "Hand a Prodigy card to a teammate — 'assign this ticket to Lejam'. Call when the member names who should own a card; pass the name exactly as they said it and the tool resolves it against who they are allowed to assign to. Assignment is a team gesture, not a manager privilege: anyone whose Discord role puts them on the card's project can hand any of that project's cards to anyone else on it (managers can assign anyone). The card keeps its lane, points and title; the new owner is told on Discord and the handover is logged. Cards that are already Done are frozen. The member's own cards come from get_my_tasks; a teammate's card id can also be used if the member gives it. If the name is ambiguous or unknown the tool says so instead of guessing — relay that to the member rather than picking for them.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "string" },
+        to: {
+          type: "string",
+          description: "Who should own the card, as the member said it",
+        },
+      },
+      required: ["taskId", "to"],
+      additionalProperties: false,
+    },
+    async run({ taskId, to }) {
+      const ctx = await repoContext();
+      if (!ctx.studio) return NOT_OPTED_IN;
+
+      let resolved;
+      try {
+        resolved = await resolveAssignee(
+          to,
+          `taskId=${encodeURIComponent(String(taskId))}`
+        );
+      } catch (err) {
+        if (err.code === "unknown_task")
+          return "No card with that id is on a board you can see — check the id with get_my_tasks. Nothing was changed.";
+        throw err;
+      }
+      if (resolved.text) return resolved.text;
+      const { who, task } = resolved;
+
+      if (task.member === who.member)
+        return `"${task.title}" is already on ${nameOf(who)}'s board — nothing to do.`;
+
+      try {
+        await api("PATCH", "/api/cc/tasks", { taskId, member: who.member });
+      } catch (err) {
+        const said = assignFailure(err, who);
+        if (said) return said;
+        throw err;
+      }
+      return `Assigned: "${task.title}" is now on ${nameOf(who)}'s board (${task.project}) — they've been told on Discord.`;
     },
   },
   {
@@ -429,7 +591,7 @@ rl.on("line", async (line) => {
           capabilities: { tools: {} },
           // Keep in step with .claude-plugin/plugin.json — it drifted to
           // 0.5.0 once and made version reports useless for debugging.
-          serverInfo: { name: "prodigy", version: "0.12.0" },
+          serverInfo: { name: "prodigy", version: "0.13.0" },
         });
         break;
       case "notifications/initialized":

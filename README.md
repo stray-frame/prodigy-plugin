@@ -42,6 +42,10 @@ paste it into Claude Code. That's it.
   having to go looking for one.
 - **Ambient progress** — when meaningful work lands, a one-line update posts
   and matching task cards move on the board.
+- **Handing work over** — "assign this ticket to Lejam" or "queue this up
+  for Lejam" puts the card on their board and tells them on Discord. Same
+  rule as the dashboard: anyone on a project's team can assign that
+  project's cards to anyone else on it; managers can assign anyone.
 - **/prodigy:standup** — today's plan and where to start.
 - **/prodigy:wrap** — a one-line session summary and a leave-off note.
 
