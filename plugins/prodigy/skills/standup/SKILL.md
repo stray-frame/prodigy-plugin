@@ -11,7 +11,10 @@ description: Morning standup for Prodigy — see today's plan and open tasks, an
    it has one, and what you can see of the codebase. Check recent git log
    for momentum ("you left off at …").
 3. Present a short standup: due today, in progress, and ONE concrete
-   suggestion for where to start in this repo, with the first step.
+   suggestion for where to start in this repo, with the first step. The
+   plan's "unclaimed" cards (this project's open pool) count as candidates —
+   say they're unowned when you suggest one.
 4. If the user picks something that matches a task, call `start_task`.
+   On a pool card that also claims it for them.
 
 Keep the whole thing under ~10 lines. No filler.

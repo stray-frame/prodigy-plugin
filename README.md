@@ -17,6 +17,9 @@ Restart when prompted, then connect your account: sign in at
 `prodigy.strayframe.net/connect`, copy the setup prompt it gives you, and
 paste it into Claude Code. That's it.
 
+Full docs, including troubleshooting, live on the dashboard:
+[prodigy.strayframe.net/plugin/docs](https://prodigy.strayframe.net/plugin/docs).
+
 ## Privacy model
 
 - **Opt-in per project.** The plugin only reports in studio repos. A repo
@@ -41,11 +44,22 @@ paste it into Claude Code. That's it.
   context on SessionStart, so work gets matched to a card without anyone
   having to go looking for one.
 - **Ambient progress** — when meaningful work lands, a one-line update posts
-  and matching task cards move on the board.
+  and matching task cards move on the board. Starting a card also clocks you
+  into that project on Discord; finishing one sends its points to a manager
+  for approval.
+- **Board fixes from the prompt** — rename a card, move it back to To do, or
+  delete it (Claude confirms deletes first). New cards carry a story-point
+  estimate and a discipline you can correct until the card is done; Done
+  cards are frozen.
 - **Handing work over** — "assign this ticket to Lejam" or "queue this up
   for Lejam" puts the card on their board and tells them on Discord. Same
   rule as the dashboard: anyone on a project's team can assign that
   project's cards to anyone else on it; managers can assign anyone.
+- **Cards for nobody yet** — "queue this up unassigned" or "put it in the
+  pool" files a card with no owner into the project's open pool, where it
+  shows on the project board for anyone on the team. Sessions in that repo
+  see the pool at start; "I'm starting on the landing-gear card" claims it.
+  "Assign this to nobody" puts a card back.
 - **/prodigy:standup** — today's plan and where to start.
 - **/prodigy:wrap** — a one-line session summary and a leave-off note.
 

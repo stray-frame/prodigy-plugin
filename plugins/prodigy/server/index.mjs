@@ -110,6 +110,21 @@ async function api(method, route, body) {
   return res.json();
 }
 
+/** The project's open pool — cards with no owner. Empty rather than an
+ *  error when the member isn't on the team (or Discord is down): the pool
+ *  is context, and a missing context line must never break a tool call. */
+async function fetchPool(project) {
+  try {
+    const { tasks } = await api(
+      "GET",
+      `/api/cc/tasks?scope=pool&project=${encodeURIComponent(project)}`
+    );
+    return Array.isArray(tasks) ? tasks : [];
+  } catch {
+    return [];
+  }
+}
+
 /* -------------------------------------------------- name resolution */
 
 /**
@@ -123,6 +138,26 @@ async function api(method, route, body) {
  * question for the member — a card landing on the wrong board is worse than
  * asking.
  */
+/** Words for "no one" — an assign_task `to` that means the open pool, or
+ *  an add_task assignee that means the same. Matched before the roster so
+ *  a teammate whose name starts with "no" can never be shadowed by it —
+ *  these are exact, not prefix. */
+const POOL_WORDS = new Set([
+  "nobody",
+  "noone",
+  "unassigned",
+  "unowned",
+  "pool",
+  "openpool",
+  "thepool",
+  "theteam",
+  "anyone",
+  "upforgrabs",
+]);
+function meansPool(name) {
+  return POOL_WORDS.has(normalizeKey(String(name ?? "")));
+}
+
 function matchAssignee(name, candidates) {
   const key = normalizeKey(String(name));
   if (!key) return { kind: "none" };
@@ -177,6 +212,8 @@ function assignFailure(err, who) {
       return "That card is already Done, and finished cards are frozen — reassigning it would move credit after the fact. Nothing was changed.";
     case "roles_unavailable":
       return "Discord didn't answer when checking project roles, so the assignment was refused rather than guessed. Try again in a moment.";
+    case "task_unassigned":
+      return "Nobody owns that card yet. It has to be claimed (start_task claims it) or assigned before it can be marked done. Nothing was changed.";
     default:
       return null;
   }
@@ -258,18 +295,21 @@ const TOOLS = [
   {
     name: "get_my_tasks",
     description:
-      "Get the member's open Prodigy tasks with ids, projects, statuses, and due dates. Call when deciding what to work on, or before reporting progress to check whether the work matches an open task.",
+      "Get the member's open Prodigy tasks with ids, projects, statuses, and due dates — plus, when this repo is a studio project, the cards in that project's OPEN POOL: cards filed with no owner, for anyone on the team to pick up. Call when deciding what to work on, or before reporting progress to check whether the work matches an open task. Before add_task, check the pool: if a pool card already describes the work, start_task on it (which claims it) instead of filing a duplicate.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     async run() {
-      const { tasks } = await api("GET", "/api/cc/tasks");
+      const ctx = await repoContext();
+      const [{ tasks }, pool] = await Promise.all([
+        api("GET", "/api/cc/tasks"),
+        ctx.studio && ctx.project ? fetchPool(ctx.project) : Promise.resolve([]),
+      ]);
+      const line = (t) =>
+        `- [${t.id}] ${t.title} · ${t.project} · ${t.status}${t.due ? ` · due ${t.due}` : ""}${t.points ? ` · ${t.points} pt` : ""}${t.skills?.length ? ` · ${t.skills[0].skill}` : ""}`;
       const open = tasks.filter((t) => t.status !== "done");
-      if (open.length === 0) return "No open tasks on the board.";
-      return open
-        .map(
-          (t) =>
-            `- [${t.id}] ${t.title} · ${t.project} · ${t.status}${t.due ? ` · due ${t.due}` : ""}${t.points ? ` · ${t.points} pt` : ""}${t.skills?.length ? ` · ${t.skills[0].skill}` : ""}`
-        )
-        .join("\n");
+      const mine =
+        open.length === 0 ? "No open tasks on the board." : open.map(line).join("\n");
+      if (!pool.length) return mine;
+      return `${mine}\n\nUnclaimed on ${ctx.project} (nobody's yet — start_task on one claims it):\n${pool.map(line).join("\n")}`;
     },
   },
   {
@@ -278,12 +318,20 @@ const TOOLS = [
       "Get today's plan: tasks due today and in progress. Call at the start of a work session or when the user asks what today looks like.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     async run() {
-      const plan = await api("GET", "/api/cc/plan");
+      const ctx = await repoContext();
+      const query =
+        ctx.studio && ctx.project
+          ? `?project=${encodeURIComponent(ctx.project)}`
+          : "";
+      const plan = await api("GET", `/api/cc/plan${query}`);
       const fmt = (list) =>
         list.length
           ? list.map((t) => `- [${t.id}] ${t.title} · ${t.project}`).join("\n")
           : "  (none)";
-      return `Due today:\n${fmt(plan.dueToday)}\nIn progress:\n${fmt(plan.inProgress)}\nOpen:\n${fmt(plan.open)}`;
+      const unclaimed = plan.unclaimed?.length
+        ? `\nUnclaimed on ${ctx.project} (start_task on one claims it):\n${fmt(plan.unclaimed)}`
+        : "";
+      return `Due today:\n${fmt(plan.dueToday)}\nIn progress:\n${fmt(plan.inProgress)}\nOpen:\n${fmt(plan.open)}${unclaimed}`;
     },
   },
   {
@@ -319,21 +367,30 @@ const TOOLS = [
         assignee: {
           type: "string",
           description:
-            "Optional: file the card on a teammate's board instead of the member's own — the name as the member said it (e.g. 'Lejam'). Only when they explicitly asked for it to go to someone else.",
+            "Optional: file the card on a teammate's board instead of the member's own — the name as the member said it (e.g. 'Lejam'). Only when they explicitly asked for it to go to someone else. 'nobody' / 'unassigned' means the same as unassigned: true.",
+        },
+        unassigned: {
+          type: "boolean",
+          description:
+            "Optional: file the card with NO owner, into the project's open pool, for anyone on the team to claim. Only when the member says so ('put it in the pool', 'leave it unassigned', 'for whoever picks it up'). Needs a project. The card shows on the project board, not on anyone's own; start_task on it later claims it.",
         },
       },
       required: ["title"],
       additionalProperties: false,
     },
-    async run({ title, project, due, points, skill, assignee }) {
+    async run({ title, project, due, points, skill, assignee, unassigned }) {
       const ctx = await repoContext();
       if (!ctx.studio) return NOT_OPTED_IN;
       const landing = project ?? ctx.project;
 
+      const pooled = unassigned === true || meansPool(assignee);
+      if (pooled && !landing)
+        return "An unassigned card needs a project — the open pool belongs to a team. Pass one, or link this repo first.";
+
       // Resolve the name BEFORE filing so a typo never queues a card on the
       // member's own board by accident.
       let who;
-      if (assignee) {
+      if (assignee && !pooled) {
         if (!landing)
           return "A card for someone else needs a project so the right team can be checked — pass one, or link this repo first.";
         const resolved = await resolveAssignee(
@@ -355,24 +412,27 @@ const TOOLS = [
           // the API stores a weighted split; a single pick is 100% of it —
           // the area's fixed Design/Tech ratio does the rest (GDT-style)
           skills: skill ? [{ skill, pct: 100 }] : undefined,
-          member: who?.member,
+          // null is the API's "nobody"; undefined is "me"
+          member: pooled ? null : who?.member,
         }));
       } catch (err) {
-        const said = who && assignFailure(err, who);
+        const said = (who || pooled) && assignFailure(err, who);
         if (said) return said;
         throw err;
       }
       const picked = task.skills?.[0]?.skill;
-      const lane = who
-        ? `card added to ${nameOf(who)}'s To do (they've been told on Discord)`
-        : "card added to To do";
+      const lane = pooled
+        ? `unassigned, in ${task.project}'s open pool — it's on the project board for anyone on the team to claim`
+        : who
+          ? `card added to ${nameOf(who)}'s To do (they've been told on Discord)`
+          : "card added to To do";
       return `Queued: ${task.title} — ${lane}${task.due ? ` (due ${task.due})` : ""} · ${task.points} pt${picked ? ` · ${picked}` : ""}.`;
     },
   },
   {
     name: "start_task",
     description:
-      "Mark a Prodigy task as in progress. Call as soon as you begin working on something that matches an open task — this moves the card to the In-progress lane on the studio dashboard, and clocks the member into that project on Discord if they weren't already working.",
+      "Mark a Prodigy task as in progress. Call as soon as you begin working on something that matches an open task — this moves the card to the In-progress lane on the studio dashboard, and clocks the member into that project on Discord if they weren't already working. Works on cards in the project's open pool too (the unclaimed ones get_my_tasks lists): starting one CLAIMS it — it becomes the member's card — which is the intended way to pick up unowned work from Claude Code.",
     inputSchema: {
       type: "object",
       properties: { taskId: { type: "string" } },
@@ -382,12 +442,20 @@ const TOOLS = [
     async run({ taskId }) {
       const ctx = await repoContext();
       if (!ctx.studio) return NOT_OPTED_IN;
-      const { task, clock } = await api("POST", "/api/cc/start", { taskId });
+      let result;
+      try {
+        result = await api("POST", "/api/cc/start", { taskId });
+      } catch (err) {
+        const said = assignFailure(err);
+        if (said) return said;
+        throw err;
+      }
+      const { task, clock, claimed } = result;
       // clock.message already states plainly what happened to the Discord
       // session — including that nothing did. Pass it through rather than
       // re-deriving it, so the model never reports a clock-in that was
       // actually skipped.
-      return `Started: ${task.title} — the card moved to In progress.${clock?.message ? ` ${clock.message}` : ""}`;
+      return `Started: ${task.title} — ${claimed ? "claimed from the open pool and " : ""}the card moved to In progress.${clock?.message ? ` ${clock.message}` : ""}`;
     },
   },
   {
@@ -416,7 +484,7 @@ const TOOLS = [
   {
     name: "assign_task",
     description:
-      "Hand a Prodigy card to a teammate — 'assign this ticket to Lejam'. Call when the member names who should own a card; pass the name exactly as they said it and the tool resolves it against who they are allowed to assign to. Assignment is a team gesture, not a manager privilege: anyone whose Discord role puts them on the card's project can hand any of that project's cards to anyone else on it (managers can assign anyone). The card keeps its lane, points and title; the new owner is told on Discord and the handover is logged. Cards that are already Done are frozen. The member's own cards come from get_my_tasks; a teammate's card id can also be used if the member gives it. If the name is ambiguous or unknown the tool says so instead of guessing — relay that to the member rather than picking for them.",
+      "Hand a Prodigy card to a teammate — 'assign this ticket to Lejam' — or to nobody: `to: \"nobody\"` (also 'unassigned', 'the pool') releases the card into its project's open pool, off the member's board, for anyone on the team to claim; a card in progress goes back to To do. Call when the member names who should own a card; pass the name exactly as they said it and the tool resolves it against who they are allowed to assign to. Assignment is a team gesture, not a manager privilege: anyone whose Discord role puts them on the card's project can hand any of that project's cards to anyone else on it (managers can assign anyone). The card keeps its lane, points and title; the new owner is told on Discord and the handover is logged. Cards that are already Done are frozen. The member's own cards come from get_my_tasks; a teammate's card id can also be used if the member gives it. If the name is ambiguous or unknown the tool says so instead of guessing — relay that to the member rather than picking for them.",
     inputSchema: {
       type: "object",
       properties: {
@@ -432,6 +500,23 @@ const TOOLS = [
     async run({ taskId, to }) {
       const ctx = await repoContext();
       if (!ctx.studio) return NOT_OPTED_IN;
+
+      if (meansPool(to)) {
+        let task;
+        try {
+          ({ task } = await api("PATCH", "/api/cc/tasks", {
+            taskId,
+            member: null,
+          }));
+        } catch (err) {
+          if (err.code === "unknown_task")
+            return "No card with that id is on a board you can see — check the id with get_my_tasks. Nothing was changed.";
+          const said = assignFailure(err);
+          if (said) return said;
+          throw err;
+        }
+        return `Released: "${task.title}" is unassigned now, in ${task.project}'s open pool — anyone on the team can claim it.`;
+      }
 
       let resolved;
       try {
@@ -591,7 +676,7 @@ rl.on("line", async (line) => {
           capabilities: { tools: {} },
           // Keep in step with .claude-plugin/plugin.json — it drifted to
           // 0.5.0 once and made version reports useless for debugging.
-          serverInfo: { name: "prodigy", version: "0.13.0" },
+          serverInfo: { name: "prodigy", version: "0.14.0" },
         });
         break;
       case "notifications/initialized":

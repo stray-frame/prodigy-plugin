@@ -103,7 +103,7 @@ async function main() {
   // has to cover one TIMEOUT_MS, not two, and the board fetch doesn't depend
   // on the event landing.
   const { signal, done } = budget();
-  const [, board] = await Promise.all([
+  const [, board, pool] = await Promise.all([
     fetch(`${url}/api/cc/events`, {
       method: "POST",
       headers: {
@@ -114,14 +114,19 @@ async function main() {
       signal,
     }).catch(() => null),
     isStart ? fetchOpenCards(url, token) : Promise.resolve(null),
+    // The project's open pool: cards nobody owns yet. Shown so a session
+    // can pick one up (start_task claims it) instead of filing a duplicate.
+    isStart && ctx.project
+      ? fetchPool(url, token, ctx.project)
+      : Promise.resolve(null),
   ]).finally(done);
 
   // SessionStart stdout is injected into the model's context. Without this
   // a session begins blind to the board: cards created on the dashboard are
   // invisible, so matching work to one depends on thinking to go looking.
   // Printing them is what makes start_task happen reliably.
-  if (isStart && board?.length) {
-    process.stdout.write(renderBoard(board, ctx.project));
+  if (isStart && (board?.length || pool?.length)) {
+    process.stdout.write(renderBoard(board ?? [], pool ?? [], ctx.project));
   }
 }
 
@@ -144,14 +149,36 @@ async function fetchOpenCards(url, token) {
   }
 }
 
+/** Null when the member isn't on the project's team (403) or anything else
+ *  goes wrong — the pool is context, never a reason to fail the hook. */
+async function fetchPool(url, token, project) {
+  const { signal, done } = budget();
+  try {
+    const res = await fetch(
+      `${url}/api/cc/tasks?scope=pool&project=${encodeURIComponent(project)}`,
+      { headers: { Authorization: `Bearer ${token}` }, signal }
+    );
+    if (!res.ok) return null;
+    const { tasks } = await res.json();
+    return Array.isArray(tasks) ? tasks : null;
+  } catch {
+    return null;
+  } finally {
+    done();
+  }
+}
+
 /** Compact enough to be worth its context: this repo's project first, a few
- *  from elsewhere, hard-capped. */
-function renderBoard(cards, project) {
+ *  from elsewhere, hard-capped; then the project's unclaimed cards, capped
+ *  separately so a big pool can't crowd out the member's own board. */
+function renderBoard(cards, pool, project) {
   const CAP = 8;
+  const POOL_CAP = 5;
   const here = cards.filter((t) => t.project === project);
   const rest = cards.filter((t) => t.project !== project);
   const shown = [...here, ...rest].slice(0, CAP);
-  if (!shown.length) return "";
+  const unclaimed = pool.slice(0, POOL_CAP);
+  if (!shown.length && !unclaimed.length) return "";
 
   const line = (t) =>
     `  [${t.id}] ${t.title}` +
@@ -161,10 +188,16 @@ function renderBoard(cards, project) {
     (t.status === "in_progress" ? " · already in progress" : "");
 
   const hidden = cards.length - shown.length;
+  const hiddenPool = pool.length - unclaimed.length;
   return [
-    `Prodigy — open cards for ${project ?? "this repo"}:`,
+    shown.length ? `Prodigy — open cards for ${project ?? "this repo"}:` : "",
     ...shown.map(line),
     hidden > 0 ? `  (+${hidden} more)` : "",
+    unclaimed.length
+      ? `Unclaimed on ${project} (nobody's yet — start_task on one claims it):`
+      : "",
+    ...unclaimed.map(line),
+    hiddenPool > 0 ? `  (+${hiddenPool} more)` : "",
     "If work this session matches one, call start_task with its id so the board",
     "reflects it, and report_progress as things land.",
     "",

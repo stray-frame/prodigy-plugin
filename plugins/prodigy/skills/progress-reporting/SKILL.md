@@ -23,7 +23,12 @@ counts as studio work is the tools' call, not yours: they resolve it from a
   follow-up work worth a card: call `add_task` with a ticket-style title.
   If they say it's for someone else ("queue this up for Lejam"), pass
   `assignee` with the name as they said it — the card lands on that
-  person's board and they're told on Discord.
+  person's board and they're told on Discord. If they say it's for nobody
+  in particular ("leave it unassigned", "put it in the pool", "for whoever
+  picks it up"), pass `unassigned: true` — the card goes into the
+  project's open pool with no owner. Check `get_my_tasks` first: it lists
+  the pool, and a pool card that already describes the work should be
+  started (`start_task` claims it), not duplicated.
 
 ## Fixing the board
 
@@ -39,6 +44,8 @@ they say so — not for tidying the board on your own initiative.
   can hand it to anyone. The tool resolves the name against who the member
   may actually assign to — if it comes back ambiguous or unknown, relay
   that and ask, never pick for them. Done cards can't be reassigned.
+  "Assign this to nobody" (`to: "nobody"`) releases the card into the
+  project's open pool; a card in progress goes back to To do.
 - Work stopped and the card should go back: `move_task` with `todo`. Use this
   rather than deleting when the work is merely paused. `complete_task` stays
   the only way to Done.
