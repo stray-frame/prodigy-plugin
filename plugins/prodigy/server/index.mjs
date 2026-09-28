@@ -294,6 +294,17 @@ async function bugProject() {
   return { ctx, project: ctx.project };
 }
 
+/** "Bug intake isn't set up for X — it runs on 2PRT only for now." Said
+ *  instead of an empty inbox, which would read as good news. */
+function notSetUp(project, enabled) {
+  const where = !enabled?.length
+    ? "isn't set up for any game yet"
+    : enabled.length === 1
+      ? `runs on ${enabled[0]} only for now`
+      : `runs on ${enabled.join(", ")}`;
+  return `Bug intake isn't set up for ${project}: it ${where}. There's nothing to triage, check or fix from this repo. Run /prodigy:bugs from ${enabled?.length === 1 ? `the ${enabled[0]} repo` : "a set-up game's repo"} instead.`;
+}
+
 function bugFailure(err) {
   switch (err.code) {
     case "not_on_project":
@@ -1001,6 +1012,7 @@ const TOOLS = [
       } catch (err) {
         return bugFailureOrThrow(err);
       }
+      if (inbox.setUp === false) return notSetUp(inbox.project ?? p.project, inbox.enabledProjects);
       if (!inbox.total) return `The ${p.project} bug inbox is empty — nothing to triage.`;
       const reports = inbox.reports
         .map((r) =>
@@ -1215,6 +1227,7 @@ const TOOLS = [
       } catch (err) {
         return bugFailureOrThrow(err);
       }
+      if (q.setUp === false) return notSetUp(q.project ?? p.project, q.enabledProjects);
       if (!q.issues.length)
         return q.stage === "fix"
           ? `No verified ${p.project} bugs are waiting on a fix.`
@@ -1494,7 +1507,7 @@ rl.on("line", async (line) => {
           capabilities: { tools: {} },
           // Keep in step with .claude-plugin/plugin.json — it drifted to
           // 0.5.0 once and made version reports useless for debugging.
-          serverInfo: { name: "prodigy", version: "0.17.0" },
+          serverInfo: { name: "prodigy", version: "0.17.1" },
         });
         break;
       case "notifications/initialized":
