@@ -130,7 +130,18 @@ Cap one run at about 200 reports and 25 code checks. Say what's left.
 
 `get_bug_queue` (stage `verify`) is ranked. Work from the top. For each issue:
 
-1. `get_bug` to read the claim, every report and the error samples.
+1. `get_bug` to read the claim, every report, **every thread reply**, and the
+   error samples. The replies are usually where the repro steps, the device
+   and the other players who hit it are. A reply marked `[STAFF]` is the
+   studio talking (context), and `[POSTER]` is the original reporter
+   following up.
+   - If the evidence is visual (a clip, a screenshot, "look at this", a title
+     with no description), call `get_bug_attachments` and **look at every
+     image and keyframe** (Read) before deciding. A clip-only report is not
+     `cannot_verify` until you've watched it.
+   - An issue already marked `[cannot_verify]` in the verify queue is back
+     because new evidence arrived after that verdict (thread replies or new
+     reports). Read the old note, then judge it again with the new evidence.
 2. Load the owning subsystem skill if the repo has one. It says where things
    live and which traps are already known.
 3. Find the code path:

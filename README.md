@@ -41,6 +41,8 @@ Full docs, including troubleshooting, live on the dashboard:
   code-check verdicts with *where* in the code (a script path, a line range,
   one line on what it shows), a short fix summary, and the rows of an Error
   Report export you imported. The source itself never leaves your machine.
+  Screenshots and clips a player attached are downloaded *to* your machine
+  (from Discord only) so Claude can look at them; nothing is uploaded.
 
 ## What you get
 
@@ -70,7 +72,10 @@ Full docs, including troubleshooting, live on the dashboard:
   CSV export), check each claim against the game's actual code with an
   independent second read, and fix what's real on the DEV place. Nothing
   becomes a board card until the code confirms it, and nothing is published —
-  a person ships the fixed batch from the dashboard's `/bugs` page. Run
+  a person ships the fixed batch from the dashboard's `/bugs` page. It reads
+  each post's whole thread and looks at attached screenshots and clips (video
+  becomes a few frames via your local ffmpeg). Prodigy never replies to
+  players. Run
   `triage`, `verify` or `fix` on their own, or `fix <id>` for one issue.
 - **/prodigy:standup** — today's plan and where to start.
 - **/prodigy:wrap** — a one-line session summary and a leave-off note.
