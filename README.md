@@ -36,6 +36,11 @@ Full docs, including troubleshooting, live on the dashboard:
   and basic metadata (repo name, branch, duration, project) leave your
   machine. Never code, never transcripts, never file contents. The API has
   no field that could carry them.
+- **Bug tools send decisions and pointers, not code.** `/prodigy:bugs`
+  additionally sends triage calls (which player reports are the same issue),
+  code-check verdicts with *where* in the code (a script path, a line range,
+  one line on what it shows), a short fix summary, and the rows of an Error
+  Report export you imported. The source itself never leaves your machine.
 
 ## What you get
 
@@ -60,6 +65,13 @@ Full docs, including troubleshooting, live on the dashboard:
   shows on the project board for anyone on the team. Sessions in that repo
   see the pool at start; "I'm starting on the landing-gear card" claims it.
   "Assign this to nobody" puts a card back.
+- **/prodigy:bugs** — work your game's player bug reports: triage what
+  players posted (and the Creator Dashboard's Error Report, imported from its
+  CSV export), check each claim against the game's actual code with an
+  independent second read, and fix what's real on the DEV place. Nothing
+  becomes a board card until the code confirms it, and nothing is published —
+  a person ships the fixed batch from the dashboard's `/bugs` page. Run
+  `triage`, `verify` or `fix` on their own, or `fix <id>` for one issue.
 - **/prodigy:standup** — today's plan and where to start.
 - **/prodigy:wrap** — a one-line session summary and a leave-off note.
 

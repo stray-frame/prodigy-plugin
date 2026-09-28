@@ -1,7 +1,7 @@
 {
   "name": "prodigy",
-  "version": "0.14.0",
-  "description": "Makes progress reporting a side effect of working: session hooks plus in-context one-liners to the Prodigy dashboard. Only reports in studio repos, recognized on your machine rather than by sending the repo name; only one-sentence summaries ever leave it.",
+  "version": "0.15.0",
+  "description": "Makes progress reporting a side effect of working: session hooks plus in-context one-liners to the Prodigy dashboard. Only reports in studio repos, recognized on your machine rather than by sending the repo name; only one-sentence summaries (plus, for /prodigy:bugs, triage decisions and code pointers) ever leave it — never code.",
   "author": { "name": "Stray Frame Studio" },
   "mcpServers": {
     "prodigy": {
