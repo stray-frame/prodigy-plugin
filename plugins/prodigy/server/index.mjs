@@ -543,6 +543,68 @@ const TOOLS = [
     },
   },
   {
+    name: "get_done_tasks",
+    description:
+      "What the project's whole team finished in a window: every card moved to Done (any owner, with its completion summary and description) and every progress line reported on the project, oldest first. Read-only. Call when compiling patch notes, a changelog or a 'what shipped' recap — the session transcripts only cover this member's own work, this covers teammates' too. Done means finished on the board, not necessarily live for players; treat it as evidence to confirm, not as a list of shipped changes.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        since: {
+          type: "string",
+          description:
+            "Start of the window: YYYY-MM-DD (UTC midnight) or a full ISO time with offset, e.g. 2026-09-26T00:00:00+07:00. Default: 14 days ago.",
+        },
+        project: {
+          type: "string",
+          description: "Studio project. Default: the project this repo is linked to.",
+        },
+      },
+      additionalProperties: false,
+    },
+    async run({ since, project } = {}) {
+      const ctx = await repoContext();
+      const wanted = project || (ctx.studio ? ctx.project : null);
+      if (!wanted)
+        return "No project given and this repo isn't linked to one — pass `project`, or link the repo with link_repo.";
+      const query = new URLSearchParams({ scope: "done", project: wanted });
+      if (since) query.set("since", since);
+      let res;
+      try {
+        res = await api("GET", `/api/cc/tasks?${query}`);
+      } catch (err) {
+        if (err.code === "not_on_project")
+          return `Your Discord roles don't put you on ${wanted}, so its history is closed to you (managers can read any).`;
+        if (err.code === "roles_unavailable")
+          return "Discord didn't answer when checking project roles, so the call was refused rather than guessed. Try again in a moment.";
+        if (err.code === "unknown_project")
+          return `No studio project matches "${wanted}".`;
+        throw err;
+      }
+      const day = (iso) => (iso ? iso.slice(0, 16).replace("T", " ") + "Z" : "?");
+      const cards = res.tasks.length
+        ? res.tasks
+            .map((t) => {
+              const extra = [
+                t.summary && `  done: ${t.summary}`,
+                t.description && `  notes: ${t.description.replace(/\s+/g, " ")}`,
+              ].filter(Boolean);
+              return [
+                `- [${t.id}] ${day(t.completedAt)} · ${t.title} · ${t.owner}${t.kind === "bug" ? " · player bug" : ""}`,
+                ...extra,
+              ].join("\n");
+            })
+            .join("\n")
+        : "  (none)";
+      const progress = res.progress.length
+        ? res.progress.map((p) => `- ${day(p.ts)} · ${p.member}: ${p.summary}`).join("\n")
+        : "  (none)";
+      const note = res.truncated
+        ? "\n\nThe studio feed doesn't reach back to the start of this window, so early progress lines and completion summaries may be missing. The cards list is complete."
+        : "";
+      return `${res.project} since ${day(res.since)} (times UTC)\n\nCards done (${res.tasks.length}):\n${cards}\n\nProgress reported (${res.progress.length}):\n${progress}${note}`;
+    },
+  },
+  {
     name: "add_task",
     description:
       "Queue a new task on the member's Prodigy board (To do lane). Call when the user asks to track, queue, or remember work for later — or when a session surfaces follow-up work worth a card. Title reads like a good ticket name; never include code, paths, or secrets. Estimate story points from the title and context — 1: trivial tweak (<30 min); 2: small, well-understood change; 3: a typical half-day task; 5: large multi-part work; 8: major feature or unfamiliar territory. Always pass your estimate; the member can adjust it on the dashboard. When unsure between two sizes, pick the larger. Also classify the task into ONE studio discipline — game_design, level_design, programming, ux_ui, art_3d, vfx, audio, production — the area the work mostly lives in (a dashboard tweak is ux_ui or programming, a blockout is level_design). Always pass your pick; the member can adjust it until the card is done. Approved points level that discipline on the member's skill profile and feed their Design/Tech core stats.",
@@ -1123,7 +1185,7 @@ const TOOLS = [
         .map((r) =>
           r.source === "game_error" || r.source === "error_report"
             ? fence("error_signature", { count: r.occurrences, place_version: r.placeVersion }, `${r.body}${r.sample ? `\n--- sample ---\n${clip(r.sample, 2000)}` : ""}`)
-            : fence("player_report", { id: r.id, source: r.source, author: r.authorName, at: r.createdAt, url: r.url }, `${r.title ? `TITLE: ${r.title}\n` : ""}${clip(r.body, 2000)}`)
+            : fence("player_report", { id: r.id, source: r.source, author: r.authorName, at: r.createdAt, url: r.url, status: r.closedAt ? "closed on Discord (the team marked it done)" : undefined }, `${r.title ? `TITLE: ${r.title}\n` : ""}${clip(r.body, 2000)}`)
         )
         .join("\n\n");
       return [
@@ -1298,7 +1360,7 @@ rl.on("line", async (line) => {
           capabilities: { tools: {} },
           // Keep in step with .claude-plugin/plugin.json — it drifted to
           // 0.5.0 once and made version reports useless for debugging.
-          serverInfo: { name: "prodigy", version: "0.15.0" },
+          serverInfo: { name: "prodigy", version: "0.16.0" },
         });
         break;
       case "notifications/initialized":

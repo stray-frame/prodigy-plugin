@@ -85,6 +85,11 @@ Cap one run at about 200 reports and 25 code checks. Say what's left.
      suggestions and feature requests, and account, payment or moderation
      complaints that aren't about game behaviour. Give the reason in one line;
      it's shown to people on `/bugs`.
+   - The inbox only holds **open** forum posts. Closing a post on Discord is
+     how the team marks it done, so closed posts never reach triage, and an
+     issue whose posts are all closed leaves the queue by itself. In `get_bug`
+     a closed post is marked `status="closed on Discord"`. Count it as
+     history, not as a live complaint.
    - A body starting `[forum: feedback]` came from the **feedback forum**.
      Expect mostly suggestions there: filter those as `Feature request: …`.
      A feedback post that describes something **broken** is a report like
