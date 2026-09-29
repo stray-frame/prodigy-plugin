@@ -126,11 +126,27 @@ Cap one run at about 200 reports and 25 code checks. Say what's left.
    fix the named items and resend. Repeat `get_bug_inbox` until it's empty or
    you hit the cap.
 
+## Working alongside other people
+
+Several devs, and several Claude sessions of one dev, can run this at the
+same time. Never compete for a bug:
+
+- `get_bug_inbox` gives **this session** its own slice of reports and says
+  how many others are triaging. Triage only what it handed you.
+- `get_bug_queue` leaves out issues someone else is checking or fixing, and
+  bugs whose card is assigned to someone else. It lists them under "held
+  back". Don't touch those.
+- **Claim before you work:** `claim_bug` before a code check, and
+  `start_bug_fix` before a fix (it claims the card too). If either says
+  someone else has it, skip to the next issue. Never work around a claim.
+- If you stop partway without a verdict or outcome, call `release_bug` so
+  the issue is free again. Claims also lapse on their own if a session dies.
+
 ## Phase 2: Verify against the code (read-only)
 
 `get_bug_queue` (stage `verify`) is ranked. Work from the top. For each issue:
 
-1. `get_bug` to read the claim, every report, **every thread reply**, and the
+1. `claim_bug`. If someone else has it, move on. Then `get_bug` to read the claim, every report, **every thread reply**, and the
    error samples. The replies are usually where the repro steps, the device
    and the other players who hit it are. A reply marked `[STAFF]` is the
    studio talking (context), and `[POSTER]` is the original reporter
@@ -200,7 +216,9 @@ verified issues for next time.
 
 Then, for each issue from `get_bug_queue` (stage `fix`), or the single `<id>`:
 
-1. `start_bug_fix`, then `get_bug` for the verified evidence.
+1. `start_bug_fix`. It claims the issue and its card for you, and refuses
+   if another dev owns the card or is already fixing it; if so, move on.
+   Then `get_bug` for the verified evidence.
 2. **Reproduce first** in a real Play session, following the repo's
    play-testing rules (for example: fixtures authored in Edit, gated on `IsStudio`, and
    deleted after). If it doesn't reproduce, report `cannot_reproduce` with what
