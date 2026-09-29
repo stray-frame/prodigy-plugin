@@ -94,12 +94,19 @@ const NOT_OPTED_IN =
 
 /* -------------------------------------------------------------- api */
 
+/** This Claude Code session, as the bug pipeline's claims see it. One MCP
+ *  server process per session, so a random id per process tells two
+ *  sessions of the same member apart — without it, a dev's second session
+ *  would pass every "is someone already on this?" check as the first. */
+const SESSION_ID = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
+
 async function api(method, route, body) {
   const res = await fetch(`${API_URL}${route}`, {
     method,
     headers: {
       Authorization: `Bearer ${currentToken()}`,
       "Content-Type": "application/json",
+      "X-Prodigy-Session": SESSION_ID,
     },
     body: body ? JSON.stringify(body) : undefined,
     signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -315,6 +322,13 @@ function bugFailure(err) {
       return "No bug with that id on this project — check it with get_bug_queue. Nothing was changed.";
     case "evidence_required":
       return "A verified or not-a-bug verdict must cite the code (script path, lines, what they show). Nothing was recorded — read the code, then submit again with evidence, or use cannot_verify.";
+    case "claimed_by_other": {
+      const d = err.detail ?? {};
+      const doing = d.stage === "fix" ? "fixing" : d.stage === "triage" ? "triaging" : "checking";
+      return `Someone else is on this one: ${d.holder ?? "another session"} has been ${doing} it${d.since ? ` since ${String(d.since).slice(11, 16)} UTC` : ""}. Leave it and take the next issue. Claims lapse on their own if that session stops.`;
+    }
+    case "assigned_to_other":
+      return `This bug's card belongs to ${err.detail?.owner ?? "someone else"}, so it's theirs to fix. Leave it and take the next one (a manager can reassign it on the board).`;
     case "invalid_batch":
       return null; // the caller formats the per-item detail
     default:
@@ -1013,7 +1027,13 @@ const TOOLS = [
         return bugFailureOrThrow(err);
       }
       if (inbox.setUp === false) return notSetUp(inbox.project ?? p.project, inbox.enabledProjects);
-      if (!inbox.total) return `The ${p.project} bug inbox is empty — nothing to triage.`;
+      const others = (inbox.heldByOthers ?? [])
+        .map((h) => `${h.count} being triaged by ${h.holder}`)
+        .join("; ");
+      if (!inbox.reports?.length)
+        return others
+          ? `Nothing left for this session to triage in ${p.project}: ${others}. Leave those to them.`
+          : `The ${p.project} bug inbox is empty — nothing to triage.`;
       const reports = inbox.reports
         .map((r) =>
           r.source === "game_error" || r.source === "error_report"
@@ -1033,7 +1053,7 @@ const TOOLS = [
             )
             .join("\n")
         : "(no issues yet)";
-      return `${p.project} inbox: ${inbox.reports.length} of ${inbox.total} untriaged shown.\n${inbox.note}\n\n${reports}\n\nExisting issues to attach to:\n${candidates}`;
+      return `${p.project} inbox: ${inbox.reports.length} report(s) claimed for this session (another session calling this gets different ones)${others ? `; ${others}, left to them` : ""}.\n${inbox.note}\n\n${reports}\n\nExisting issues to attach to:\n${candidates}`;
     },
   },
   {
@@ -1228,11 +1248,65 @@ const TOOLS = [
         return bugFailureOrThrow(err);
       }
       if (q.setUp === false) return notSetUp(q.project ?? p.project, q.enabledProjects);
+      if (!q.issues.length && q.busy?.length)
+        return `Every ${q.stage === "fix" ? "verified bug" : "issue awaiting a check"} in ${p.project} is already being worked on by someone else: ${q.busy
+          .map((b) => `#${b.id} (${b.stage === "assigned" ? `assigned to ${b.holder}` : b.holder})`)
+          .join(", ")}. Nothing for this session right now.`;
       if (!q.issues.length)
         return q.stage === "fix"
           ? `No verified ${p.project} bugs are waiting on a fix.`
           : `Nothing in ${p.project} is waiting on a code check.`;
-      return `${p.project} ${q.stage === "fix" ? "fix" : "code-check"} queue:\n${q.issues.map(issueLine).join("\n")}`;
+      const held = (q.busy ?? []).length
+        ? `\n\nHeld back, someone's on them (don't touch):\n${q.busy
+            .map((b) => `- #${b.id} ${b.title} · ${b.stage === "assigned" ? `card assigned to ${b.holder}` : `${b.stage === "fix" ? "being fixed" : "being checked"} by ${b.holder}`}`)
+            .join("\n")}`
+        : "";
+      return `${p.project} ${q.stage === "fix" ? "fix" : "code-check"} queue:\n${q.issues.map(issueLine).join("\n")}${held}`;
+    },
+  },
+  {
+    name: "claim_bug",
+    description:
+      "Claim an issue's code check for THIS session before reading or judging it, so no other dev — or other Claude session of the same dev — checks it at the same time. Call it first for each issue you take from get_bug_queue (verify). If someone else has it, the tool says who; skip to the next issue. The claim renews when called again and lapses on its own after 45 minutes; submitting the verdict releases it. (Fixing is claimed by start_bug_fix instead.)",
+    inputSchema: {
+      type: "object",
+      properties: { issueId: { type: "number" } },
+      required: ["issueId"],
+      additionalProperties: false,
+    },
+    async run({ issueId }) {
+      const p = await bugProject();
+      if (p.text) return p.text;
+      try {
+        await api("POST", `/api/cc/bugs/${Number(issueId)}/claim`);
+      } catch (err) {
+        return bugFailureOrThrow(err);
+      }
+      return `Claimed #${issueId} for this session; nobody else will be handed it while you check it.`;
+    },
+  },
+  {
+    name: "release_bug",
+    description:
+      "Let go of an issue this session claimed (a code check or a fix you're abandoning) so someone else can take it straight away instead of waiting for the claim to lapse. Call it when you stop working on an issue without submitting a verdict or outcome.",
+    inputSchema: {
+      type: "object",
+      properties: { issueId: { type: "number" } },
+      required: ["issueId"],
+      additionalProperties: false,
+    },
+    async run({ issueId }) {
+      const p = await bugProject();
+      if (p.text) return p.text;
+      let r;
+      try {
+        r = await api("DELETE", `/api/cc/bugs/${Number(issueId)}/claim`);
+      } catch (err) {
+        return bugFailureOrThrow(err);
+      }
+      return r.released
+        ? `Released #${issueId}; it's free for anyone to take.`
+        : `#${issueId} wasn't claimed by this session, so there was nothing to release.`;
     },
   },
   {
@@ -1507,7 +1581,7 @@ rl.on("line", async (line) => {
           capabilities: { tools: {} },
           // Keep in step with .claude-plugin/plugin.json — it drifted to
           // 0.5.0 once and made version reports useless for debugging.
-          serverInfo: { name: "prodigy", version: "0.17.1" },
+          serverInfo: { name: "prodigy", version: "0.18.0" },
         });
         break;
       case "notifications/initialized":
