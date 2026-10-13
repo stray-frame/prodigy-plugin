@@ -592,7 +592,7 @@ const TOOLS = [
   {
     name: "get_my_tasks",
     description:
-      "Get the member's open Prodigy tasks with ids, projects, statuses, and due dates — plus, when this repo is a studio project, the cards in that project's OPEN POOL: cards filed with no owner, for anyone on the team to pick up. Call when deciding what to work on, or before reporting progress to check whether the work matches an open task. Before add_task, check the pool: if a pool card already describes the work, start_task on it (which claims it) instead of filing a duplicate.",
+      "Get the member's open Prodigy tasks with ids, projects, statuses, due dates and descriptions — plus, when this repo is a studio project, the cards in that project's OPEN POOL: cards filed with no owner, for anyone on the team to pick up. Call when deciding what to work on, or before reporting progress to check whether the work matches an open task. Before add_task, check the pool: if a pool card already describes the work, start_task on it (which claims it) instead of filing a duplicate.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     async run() {
       const ctx = await repoContext();
@@ -600,8 +600,14 @@ const TOOLS = [
         api("GET", "/api/cc/tasks"),
         ctx.studio && ctx.project ? fetchPool(ctx.project) : Promise.resolve([]),
       ]);
+      // The description verbatim (indented, line breaks kept): edit_task
+      // replaces it whole, so an edit has to start from the exact text.
+      const notes = (t) =>
+        t.description?.trim()
+          ? `\n  description:\n${t.description.replace(/^/gm, "    ")}`
+          : "";
       const line = (t) =>
-        `- [${t.id}] ${t.title} · ${t.project} · ${t.status}${t.due ? ` · due ${t.due}` : ""}${t.points ? ` · ${t.points} pt` : ""}${t.skills?.length ? ` · ${t.skills[0].skill}` : ""}`;
+        `- [${t.id}] ${t.title} · ${t.project} · ${t.status}${t.due ? ` · due ${t.due}` : ""}${t.points ? ` · ${t.points} pt` : ""}${t.skills?.length ? ` · ${t.skills[0].skill}` : ""}${notes(t)}`;
       const open = tasks.filter((t) => t.status !== "done");
       const mine =
         open.length === 0 ? "No open tasks on the board." : open.map(line).join("\n");
@@ -820,24 +826,52 @@ const TOOLS = [
   {
     name: "edit_task",
     description:
-      "Fix the title of one of the member's existing cards. Call when they say a card is worded wrong, has a typo, or should read differently — not to re-scope work, which is a new card. Title only: project, due date and skill classification are deliberately not editable here. A card that is already Done is frozen and cannot be retitled.",
+      "Change the title and/or description of one of the member's existing cards. Call when they say a card is worded wrong, should read differently, or its description needs notes, steps or a checklist added, changed or removed. The description is REPLACED whole: read the current text from get_my_tasks first and send the full new version, keeping what the member didn't ask to change (Markdown, including `- [ ]` checklists, is kept as written). `description: \"\"` clears it. Re-scoped work is a new card, not an edit. Project, due date and skill classification are not editable here. A card that is already Done is frozen — finished cards are a record, so neither field can change.",
     inputSchema: {
       type: "object",
       properties: {
         taskId: { type: "string" },
-        title: { type: "string", description: "New title, ≤140 chars" },
+        title: { type: "string", description: "New title, ≤140 chars. Omit to keep it." },
+        description: {
+          type: "string",
+          description: "Full new description, ≤10,000 chars; replaces the old one. \"\" clears it. Omit to keep it.",
+        },
       },
-      required: ["taskId", "title"],
+      required: ["taskId"],
       additionalProperties: false,
     },
-    async run({ taskId, title }) {
+    async run({ taskId, title, description }) {
       const ctx = await repoContext();
       if (!ctx.studio) return NOT_OPTED_IN;
-      const { task } = await api("PATCH", "/api/cc/tasks", {
-        taskId,
-        title: String(title).slice(0, 140),
-      });
-      return `Renamed: the card now reads "${task.title}".`;
+      const body = { taskId };
+      if (title !== undefined && String(title).trim())
+        body.title = String(title).trim().slice(0, 140);
+      if (description !== undefined) {
+        const text = String(description);
+        // Refuse rather than truncate: a silently clipped description loses
+        // the member's text with no sign anything went missing.
+        if (text.length > 10_000)
+          return `That description is ${text.length.toLocaleString()} characters; cards hold at most 10,000. Nothing was changed — shorten it and try again.`;
+        body.description = text;
+      }
+      if (body.title === undefined && body.description === undefined)
+        return "Nothing to change — pass a new title, a new description, or both.";
+      let task;
+      try {
+        ({ task } = await api("PATCH", "/api/cc/tasks", body));
+      } catch (err) {
+        if (err.code === "task_done")
+          return "That card is already Done, and finished cards are frozen — they're the record of what shipped. Nothing was changed; if there's more to do, that's a new card.";
+        if (err.code === "unknown_task")
+          return "That card isn't one you can edit — either the id is wrong, or it belongs to someone else (only its owner or a board manager can change its wording). Nothing was changed.";
+        throw err;
+      }
+      const changed = [
+        body.title !== undefined && `the title now reads "${task.title}"`,
+        body.description !== undefined &&
+          (task.description ? "the description was updated" : "the description was cleared"),
+      ].filter(Boolean);
+      return `Edited: ${changed.join(" and ")}.`;
     },
   },
   {
@@ -1581,7 +1615,7 @@ rl.on("line", async (line) => {
           capabilities: { tools: {} },
           // Keep in step with .claude-plugin/plugin.json — it drifted to
           // 0.5.0 once and made version reports useless for debugging.
-          serverInfo: { name: "prodigy", version: "0.18.0" },
+          serverInfo: { name: "prodigy", version: "0.19.0" },
         });
         break;
       case "notifications/initialized":
