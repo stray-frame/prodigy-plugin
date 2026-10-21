@@ -287,7 +287,12 @@ function issueLine(i) {
     i.occurrences ? `${i.occurrences} errors` : null,
     i.score !== undefined ? `rank ${i.score}` : null,
   ].filter(Boolean);
-  return `- #${i.id} [${i.status}] S${i.severity} ${i.kind} · ${i.title}${i.subsystem ? ` · ${i.subsystem}` : ""}${stats.length ? ` · ${stats.join(" · ")}` : ""}${i.cardId ? ` · card ${i.cardId}` : ""}\n  claim: ${i.claim}`;
+  // Back in the verify queue because a newer build went live after its
+  // verdict: the first question is whether current code already fixed it.
+  const recheck = i.recheckReason === "new_build"
+    ? `\n  RECHECK: judged before live build v${i.liveVersion}; nothing seen on it since. Check whether current code already fixes it.`
+    : "";
+  return `- #${i.id} [${i.status}] S${i.severity} ${i.kind} · ${i.title}${i.subsystem ? ` · ${i.subsystem}` : ""}${stats.length ? ` · ${stats.join(" · ")}` : ""}${i.cardId ? ` · card ${i.cardId}` : ""}\n  claim: ${i.claim}${recheck}`;
 }
 
 /** Resolve the studio project for a bug tool, or the sentence to return. */
@@ -1093,7 +1098,7 @@ const TOOLS = [
   {
     name: "triage_bug_reports",
     description:
-      "Player bug pipeline, step 1b. Apply triage decisions for inbox reports, as one atomic batch (all land or none do; a refusal names each bad item). Per report: `attach` it to an existing issue (issueId) — or to a new issue created earlier in the SAME batch (issueKey = that item's key); `new` creates an issue from it (give it a key if later items attach to it); `filter` sets it aside as noise with a reason people will read on /bugs. Never filter a report for being badly written, rude, vague or misspelled — rewrite it into a testable claim instead; filter only spam, off-topic chat, questions, suggestions/feature requests, and account/payment/moderation issues that aren't bugs. Only decisions leave the machine.",
+      "Player bug pipeline, step 1b. Apply triage decisions for inbox reports, as one atomic batch (all land or none do; a refusal names each bad item). Per report: `attach` it to an existing issue (issueId) — or to a new issue created earlier in the SAME batch (issueKey = that item's key); `new` creates an issue from it (give it a key if later items attach to it); `filter` sets it aside as noise with a reason people will read on the dashboard's Triage page. Never filter a report for being badly written, rude, vague or misspelled — rewrite it into a testable claim instead; filter only spam, off-topic chat, questions, suggestions/feature requests, and account/payment/moderation issues that aren't bugs. Only decisions leave the machine.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1462,7 +1467,7 @@ const TOOLS = [
   {
     name: "submit_bug_verdict",
     description:
-      "Record the code check for one issue. verified = you traced the code path that produces what players describe and can point at it; this files the fix card onto the member's board. not_a_bug = the code shows the behaviour is intended (cite where). cannot_verify = you couldn't confirm or rule it out from the code (needs a Play repro, or the report lacks the detail — say what's missing); a person picks it up on /bugs. verified and not_a_bug REQUIRE evidence, and per the /prodigy:bugs skill must first survive an independent reviewer re-reading the cited lines. Evidence is where in the code, never the code: script path/instance path, line range, and one line on what it shows.",
+      "Record the code check for one issue. verified = you traced the code path that produces what players describe and can point at it; this files the fix card onto the member's board. not_a_bug = the code shows the behaviour is intended (cite where). cannot_verify = you couldn't confirm or rule it out from the code (needs a Play repro, or the report lacks the detail — say what's missing); a person picks it up under Decide on the dashboard's Triage page. End the note with one sentence that starts \"Needs\" and names what would settle it (e.g. \"Needs a client log from an affected session.\"): Triage shows that sentence as the ask. verified and not_a_bug REQUIRE evidence, and per the /prodigy:bugs skill must first survive an independent reviewer re-reading the cited lines. Evidence is where in the code, never the code: script path/instance path, line range, and one line on what it shows.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1514,7 +1519,7 @@ const TOOLS = [
         return `Verified #${issueId} — fix card ${r.card?.id ?? "(pending)"} is on your board.`;
       if (verdict === "not_a_bug")
         return `Closed #${issueId} as not a bug. New reports of it will attach to this verdict; enough new players reopen it.`;
-      return `#${issueId} handed to a person on /bugs (couldn't verify).`;
+      return `#${issueId} handed to a person under Decide on Triage (couldn't verify).`;
     },
   },
   {
@@ -1552,7 +1557,7 @@ const TOOLS = [
   {
     name: "report_bug_outcome",
     description:
-      "Record the fix pass's result for one issue. fixed = changed on the DEV place/branch AND watched working (the reproduction now passes) — it goes to Ready to publish on /bugs and its card completes; nothing is published. cannot_reproduce = the bug didn't happen in a real repro; needs_design = fixing it means a design decision a person should make; not_a_bug = the repro showed intended behaviour. The summary is one or two plain sentences on what changed and where (no code).",
+      "Record the fix pass's result for one issue. fixed = changed on the DEV place/branch AND watched working (the reproduction now passes) — it goes to Ship on the Triage page and its card completes; nothing is published. cannot_reproduce = the bug didn't happen in a real repro; needs_design = fixing it means a design decision a person should make; not_a_bug = the repro showed intended behaviour. The summary is one or two plain sentences on what changed and where (no code).",
     inputSchema: {
       type: "object",
       properties: {
@@ -1576,8 +1581,8 @@ const TOOLS = [
         return bugFailureOrThrow(err);
       }
       if (outcome === "fixed")
-        return `#${issueId} is Ready to publish on /bugs${r.cardCompleted ? " and its card moved to Done" : " (its card wasn't yours to complete, so it stayed put)"}. A person publishes the batch.`;
-      return `#${issueId} handed back (${outcome.replace(/_/g, " ")}) — it's under Needs you on /bugs.`;
+        return `#${issueId} is under Ship on Triage${r.cardCompleted ? " and its card moved to Done" : " (its card wasn't yours to complete, so it stayed put)"}. A person publishes the batch.`;
+      return `#${issueId} handed back (${outcome.replace(/_/g, " ")}) — it's under Decide on Triage.`;
     },
   },
 ];
@@ -1615,7 +1620,7 @@ rl.on("line", async (line) => {
           capabilities: { tools: {} },
           // Keep in step with .claude-plugin/plugin.json — it drifted to
           // 0.5.0 once and made version reports useless for debugging.
-          serverInfo: { name: "prodigy", version: "0.19.0" },
+          serverInfo: { name: "prodigy", version: "0.20.0" },
         });
         break;
       case "notifications/initialized":

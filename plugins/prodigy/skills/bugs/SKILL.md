@@ -8,7 +8,7 @@ description: Work the studio's player bug pipeline for the game this repo belong
 Players report bugs on the game's Discord forum and Roblox community forum,
 and the game's error relay logs every Luau error signature. The Prodigy bot
 only collects these. **You** do the judging, here, where the game's code
-is. The dashboard's `/bugs` page shows the results, and a person publishes
+is. The dashboard's Triage page (`/triage`) shows the results, and a person publishes
 the fixed batch.
 
 Most player reports are noise or poorly written, and a board full of
@@ -88,7 +88,7 @@ Cap one run at about 200 reports and 25 code checks. Say what's left.
    - **filter** only for spam, off-topic chat, pure questions ("how do I…"),
      suggestions and feature requests, and account, payment or moderation
      complaints that aren't about game behaviour. Give the reason in one line;
-     it's shown to people on `/bugs`.
+     it's shown to people on Triage.
    - The inbox only holds **open** forum posts. Closing a post on Discord is
      how the team marks it done, so closed posts never reach triage, and an
      issue whose posts are all closed leaves the queue by itself. In `get_bug`
@@ -158,6 +158,16 @@ same time. Never compete for a bug:
    - An issue already marked `[cannot_verify]` in the verify queue is back
      because new evidence arrived after that verdict (thread replies or new
      reports). Read the old note, then judge it again with the new evidence.
+   - An issue with a **RECHECK** line (`[cannot_verify]` or `[needs_design]`)
+     is back because a newer build went live after its verdict and nothing
+     has been seen on it since: no error on that build, no new post or reply.
+     The code may have moved under the old note. Make sure you're reading
+     current code first (pull the repo, or the place as it is now), then look
+     for the change that fixed it. Fixed in current code → `not_a_bug`, note
+     starting "Fixed in current code:", evidence citing the lines that now
+     prevent it. Still there → judge it fresh like any other issue; a
+     re-submitted `cannot_verify` with the same ask is fine, and dates the
+     verdict past the new build.
 2. Load the owning subsystem skill if the repo has one. It says where things
    live and which traps are already known.
 3. Find the code path:
@@ -176,8 +186,10 @@ same time. Never compete for a bug:
      Cite it.
    - **cannot_verify** — the code doesn't settle it. It may need a Play repro
      (timing, physics, replication, device-specific), or the reports lack what
-     you'd need. In the note, say exactly what's missing. Don't guess
-     either way.
+     you'd need. In the note, say exactly what's missing, and end it with
+     one sentence that starts "Needs" ("Needs a client log from an affected
+     session."): Triage shows that sentence to people as the ask. Don't
+     guess either way.
 5. **Independent review before verified or not_a_bug.** Spawn a read-only
    reviewer subagent (the Agent tool). If the repo names a preferred model
    for independent review, use it. Brief it with:
@@ -229,11 +241,11 @@ Then, for each issue from `get_bug_queue` (stage `fix`), or the single `<id>`:
    broke. Nothing is fixed until it has been watched working.
 5. `report_bug_outcome`:
    - `fixed` with one or two sentences on what changed and where. That puts
-     it in Ready to publish and completes the card.
+     it under Ship and completes the card.
    - `needs_design` if the right fix is a gameplay decision.
    - `not_a_bug` if the repro showed it's intended.
 6. **Never publish the place, push to main, or deploy.** Publishing is the
-   human gate on `/bugs`.
+   human gate on Triage.
 
 ## Finish
 
@@ -243,7 +255,7 @@ Tell the user in a few lines:
 - how many are fixed and waiting on a publish
 - anything you stopped short of, and why
 
-Point them to `/bugs` on the dashboard for the batch publish.
+Point them to Triage (`/triage`) on the dashboard for the batch publish.
 
 ## Running it unattended
 

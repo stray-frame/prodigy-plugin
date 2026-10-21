@@ -72,7 +72,7 @@ Full docs, including troubleshooting, live on the dashboard:
   CSV export), check each claim against the game's actual code with an
   independent second read, and fix what's real on the DEV place. Nothing
   becomes a board card until the code confirms it, and nothing is published —
-  a person ships the fixed batch from the dashboard's `/bugs` page. It reads
+  a person ships the fixed batch from the dashboard's Triage page (`/triage`). It reads
   each post's whole thread and looks at attached screenshots and clips (video
   becomes a few frames via your local ffmpeg). Prodigy never replies to
   players. Run
