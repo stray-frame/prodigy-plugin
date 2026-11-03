@@ -1,6 +1,6 @@
 ---
 name: bugs
-description: Work the studio's player bug pipeline for the game this repo belongs to — triage player reports and game error logs, check each claim against the game's actual code, and fix what's real on the DEV place. Use when the user runs /prodigy:bugs (optionally with `triage`, `verify`, `fix`, `fix <id>` or `all`), or asks to go through player bug reports, the bug inbox, the error log, or the bug queue.
+description: Work the studio's player bug pipeline for the game this repo belongs to — triage player reports and game error logs, check each claim against the game's actual code, and fix what's real (on the DEV place, or as commits on your branch for games whose code is on GitHub). Use when the user runs /prodigy:bugs (optionally with `triage`, `verify`, `fix`, `fix <id>` or `all`), or asks to go through player bug reports, the bug inbox, the error log, or the bug queue.
 ---
 
 # Prodigy bugs
@@ -44,8 +44,22 @@ this:
 
 Find out before the verify phase:
 
-- **The repo has the source** (Rojo `src/`, `default.project.json`, `.luau` files):
-  read it with Grep/Read.
+- **The repo has the source and is on GitHub** (Rojo `src/`,
+  `default.project.json`, `.luau` files, an `origin` on github.com): the live
+  game runs what's on `main`, so judge against **`origin/main`**, not your
+  checked-out branch. Your branch may be behind main or carry unmerged work.
+  Run `git fetch origin` once at the start of verify. Then:
+  - If your branch has no commits ahead of or behind main
+    (`git rev-list --left-right --count origin/main...HEAD` prints `0 0`) and
+    the files you cite have no uncommitted edits, read the working tree with
+    Grep/Read as usual.
+  - Otherwise read main itself: `git grep -n <pattern> origin/main -- src`
+    to search, and `git show origin/main:<path>` to read a file. Line numbers
+    from those match main.
+
+  Pass `commit` (from `git rev-parse origin/main`) to `submit_bug_verdict` so
+  the evidence's line numbers can be found again later.
+- **The repo has the source but isn't on GitHub**: read it with Grep/Read.
 - **The code lives only in the Roblox place** (the repo's CLAUDE.md will say
   so): read it through the Roblox Studio MCP. Use `get_studio_state`
   to see what's open, `script_grep` to search, and `script_read` to read.
@@ -162,8 +176,10 @@ same time. Never compete for a bug:
      is back because a newer build went live after its verdict and nothing
      has been seen on it since: no error on that build, no new post or reply.
      The code may have moved under the old note. Make sure you're reading
-     current code first (pull the repo, or the place as it is now), then look
-     for the change that fixed it. Fixed in current code → `not_a_bug`, note
+     current code first (`git fetch` and read `origin/main`, or the place as
+     it is now), then look for the change that fixed it. In a git repo,
+     `git log origin/main --since=<verdict date> -- <cited paths>` finds it
+     quickly. Fixed in current code → `not_a_bug`, note
      starting "Fixed in current code:", evidence citing the lines that now
      prevent it. Still there → judge it fresh like any other issue; a
      re-submitted `cannot_verify` with the same ask is fine, and dates the
@@ -221,8 +237,16 @@ verified issues for next time.
   - `get_studio_state` shows Studio open on the game's **DEV/test** place (the
     repo names it), never the live one.
   - Nobody else's Play session is running. Never stop someone's Play session.
-- **Repos with source:** you're on a working branch, not `main`, and the tree
-  is clean or only has your changes.
+- **Repos with source:** follow the repo's own branch rules (its CLAUDE.md;
+  2PRT, for example, keeps each dev on a personal branch and changes `main`
+  only through pull requests). You're on that working branch, never `main`,
+  and the tree is clean or only has your changes. Bring the branch up to date
+  with `origin/main` the way the repo says to (2PRT has a `sync-main` skill),
+  so you fix the code that ships rather than an old copy of it.
+- **Rojo repos:** the code reaches Studio through Rojo, so Rojo has to be
+  serving this clone and connected in Studio before you Play test (the repo
+  usually has a skill for it, such as `rojo-serve`). Never edit Rojo-owned
+  scripts in Studio; edit the files.
 - **Only you mutate Studio** during this phase. One agent editing the place
   at a time.
 
@@ -239,23 +263,51 @@ Then, for each issue from `get_bug_queue` (stage `fix`), or the single `<id>`:
    around it and don't "fix" neighbouring code nobody reported.
 4. **Confirm in Play** that the repro now passes and nothing obvious nearby
    broke. Nothing is fixed until it has been watched working.
-5. `report_bug_outcome`:
+5. **Repos on GitHub: commit the fix, one commit per issue.** Commit only
+   this issue's files, with a subject line that says what changed and a
+   trailer line `Prodigy-Bug: #<id>`. One issue per commit is what lets
+   Triage tie each fix to its pull request, and lets a bad fix be reverted
+   without taking the others with it.
+6. `report_bug_outcome`:
    - `fixed` with one or two sentences on what changed and where. That puts
-     it under Ship and completes the card.
+     it under Ship and completes the card. In a repo on GitHub, pass
+     `commit` (`git rev-parse HEAD` right after the commit). The tool refuses
+     a repo fix without one.
    - `needs_design` if the right fix is a gameplay decision.
    - `not_a_bug` if the repro showed it's intended.
-6. **Never publish the place, push to main, or deploy.** Publishing is the
-   human gate on Triage.
+7. **Never publish the place, push to main, merge a pull request, or
+   deploy.** Publishing is the human gate on Triage.
+
+### Getting repo fixes to main
+
+A repo fix sits under Ship on Triage and **can't be published until its
+commit is merged into `main`**. Triage asks GitHub and shows "not pushed yet",
+"no pull request yet" or "waiting on PR #n" until then. So once the fixes are
+committed:
+
+1. Repos often say to push only when asked (2PRT does). Ask once for the
+   whole batch: "Push `<branch>` and open a pull request to main with these
+   N fixes?" Don't push without a yes.
+2. With a yes, push the branch. If it already has an open PR into `main`
+   (`gh pr list --head <branch> --base main`), the new commits join it.
+   Otherwise open one with `gh pr create --base main`. List the fixed issues
+   in the body as `#<id> <title>`, one per line. Never put player text in it
+   beyond the issue title.
+3. Leave merging to a person, through GitHub or by asking for it. A merged PR
+   is what moves the fixes to publishable on Triage.
+
 
 ## Finish
 
 Tell the user in a few lines:
 - how many reports you triaged and filtered
 - how many issues were verified, closed or handed back
-- how many are fixed and waiting on a publish
+- how many are fixed and waiting on a publish, and for repo fixes, whether
+  they're pushed and which PR they're waiting on
 - anything you stopped short of, and why
 
-Point them to Triage (`/triage`) on the dashboard for the batch publish.
+Point them to Triage (`/triage`) on the dashboard for the batch publish (once
+the PR is merged, for repo fixes).
 
 ## Running it unattended
 
@@ -264,8 +316,8 @@ For a headless run on a studio PC:
 
 ```
 claude -p "/prodigy:bugs" --model claude-opus-5-5 \
-  --allowedTools "mcp__plugin_prodigy_prodigy,mcp__Roblox_Studio__get_studio_state,mcp__Roblox_Studio__script_grep,mcp__Roblox_Studio__script_read,Read,Grep,Glob,Agent"
+  --allowedTools "mcp__plugin_prodigy_prodigy,mcp__Roblox_Studio__get_studio_state,mcp__Roblox_Studio__script_grep,mcp__Roblox_Studio__script_read,Read,Grep,Glob,Agent,Bash(git fetch:*),Bash(git grep:*),Bash(git show:*),Bash(git rev-parse:*),Bash(git rev-list:*),Bash(git log:*),Bash(git status:*)"
 ```
 
-That allow-list is read-only on the game, so a headless run triages and
-verifies but stops before fix. Run `/prodigy:bugs fix` interactively.
+That allow-list is read-only on the game and the repo (the git commands only
+fetch and read), so a headless run triages and verifies but stops before fix. Run `/prodigy:bugs fix` interactively.

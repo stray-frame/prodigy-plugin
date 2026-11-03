@@ -70,9 +70,12 @@ Full docs, including troubleshooting, live on the dashboard:
 - **/prodigy:bugs** — work your game's player bug reports: triage what
   players posted (and the Creator Dashboard's Error Report, imported from its
   CSV export), check each claim against the game's actual code with an
-  independent second read, and fix what's real on the DEV place. Nothing
-  becomes a board card until the code confirms it, and nothing is published —
-  a person ships the fixed batch from the dashboard's Triage page (`/triage`). It reads
+  independent second read, and fix what's real on the DEV place, or as one
+  commit per issue on your branch when the game's code is on GitHub (Claude
+  asks before pushing and opening the pull request). Nothing becomes a board
+  card until the code confirms it, and nothing is published —
+  a person ships the fixed batch from the dashboard's Triage page (`/triage`),
+  and a repo fix can only ship once its pull request is merged into main. It reads
   each post's whole thread and looks at attached screenshots and clips (video
   becomes a few frames via your local ffmpeg). Prodigy never replies to
   players. Run

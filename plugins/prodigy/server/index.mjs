@@ -29,8 +29,11 @@ import path from "node:path";
 
 import {
   TIMEOUT_MS,
+  git,
+  githubRepo,
   loadRegistry,
   normalizeKey,
+  resolveCommit,
   resolveRepo,
   writeMarker,
 } from "../lib/studio-repo.mjs";
@@ -1492,13 +1495,24 @@ const TOOLS = [
           enum: [1, 2, 3, 5, 8],
           description: "verified only: story-point estimate for the fix",
         },
+        commit: {
+          type: "string",
+          description:
+            "Repos on GitHub: the commit you read the code at — origin/main right after `git fetch` (git rev-parse origin/main). Evidence line numbers are as of this commit. Omit for place-only games.",
+        },
       },
       required: ["issueId", "verdict", "note"],
       additionalProperties: false,
     },
-    async run({ issueId, verdict, note, evidence, points }) {
+    async run({ issueId, verdict, note, evidence, points, commit }) {
       const p = await bugProject();
       if (p.text) return p.text;
+      let readAt;
+      if (commit) {
+        readAt = resolveCommit(p.ctx.gitRoot, commit);
+        if (!readAt)
+          return `"${commit}" isn't a commit in this clone. Run git fetch, pass git rev-parse origin/main, and send the verdict again.`;
+      }
       const ev = (Array.isArray(evidence) ? evidence : []).map((e) => ({
         path: clip(e.path, 300),
         lines: clip(e.lines ?? "", 40),
@@ -1511,6 +1525,7 @@ const TOOLS = [
           note: clip(note, 600),
           evidence: ev,
           points,
+          commit: readAt,
         });
       } catch (err) {
         return bugFailureOrThrow(err);
@@ -1557,31 +1572,52 @@ const TOOLS = [
   {
     name: "report_bug_outcome",
     description:
-      "Record the fix pass's result for one issue. fixed = changed on the DEV place/branch AND watched working (the reproduction now passes) — it goes to Ship on the Triage page and its card completes; nothing is published. cannot_reproduce = the bug didn't happen in a real repro; needs_design = fixing it means a design decision a person should make; not_a_bug = the repro showed intended behaviour. The summary is one or two plain sentences on what changed and where (no code).",
+      "Record the fix pass's result for one issue. fixed = changed on the DEV place/branch AND watched working (the reproduction now passes) — it goes to Ship on the Triage page and its card completes; nothing is published. In a repo on GitHub, `fixed` REQUIRES `commit`: the commit on your branch that holds this fix (commit first, one commit per issue). Triage won't let it be published until that commit's pull request is merged into main. cannot_reproduce = the bug didn't happen in a real repro; needs_design = fixing it means a design decision a person should make; not_a_bug = the repro showed intended behaviour. The summary is one or two plain sentences on what changed and where (no code).",
     inputSchema: {
       type: "object",
       properties: {
         issueId: { type: "number" },
         outcome: { type: "string", enum: ["fixed", "cannot_reproduce", "needs_design", "not_a_bug"] },
         summary: { type: "string", description: "≤600 chars, no code" },
+        commit: {
+          type: "string",
+          description: "fixed, repos on GitHub: SHA of the commit that holds this fix (git rev-parse HEAD right after committing it)",
+        },
       },
       required: ["issueId", "outcome", "summary"],
       additionalProperties: false,
     },
-    async run({ issueId, outcome, summary }) {
+    async run({ issueId, outcome, summary, commit }) {
       const p = await bugProject();
       if (p.text) return p.text;
+      // A repo game ships what's on main, so a repo fix has to say which
+      // commit it is: that's what Triage waits on to merge.
+      let fix;
+      const repo = githubRepo(p.ctx.gitRoot);
+      if (outcome === "fixed" && repo) {
+        if (!commit)
+          return `${repo} is on GitHub, so a fix needs its commit: commit this issue's change on your branch (one commit per issue), then call report_bug_outcome again with commit set to git rev-parse HEAD.`;
+        const sha = resolveCommit(p.ctx.gitRoot, commit);
+        if (!sha) return `"${commit}" isn't a commit in this clone. Commit the fix first, then pass git rev-parse HEAD.`;
+        const branch = git(p.ctx.gitRoot, "rev-parse --abbrev-ref HEAD") || undefined;
+        fix = { repo, commit: sha, branch: branch && branch !== "HEAD" ? branch : undefined };
+      }
       let r;
       try {
         r = await api("POST", `/api/cc/bugs/${Number(issueId)}/outcome`, {
           outcome,
           summary: clip(summary, 600),
+          ...(fix ? { fix } : {}),
         });
       } catch (err) {
         return bugFailureOrThrow(err);
       }
-      if (outcome === "fixed")
-        return `#${issueId} is under Ship on Triage${r.cardCompleted ? " and its card moved to Done" : " (its card wasn't yours to complete, so it stayed put)"}. A person publishes the batch.`;
+      if (outcome === "fixed") {
+        const card = r.cardCompleted ? " and its card moved to Done" : " (its card wasn't yours to complete, so it stayed put)";
+        if (fix)
+          return `#${issueId} is under Ship on Triage${card}, tied to ${fix.commit.slice(0, 7)} on ${fix.branch ?? "this branch"}. It can be published once that commit is pushed and its pull request is merged into main.`;
+        return `#${issueId} is under Ship on Triage${card}. A person publishes the batch.`;
+      }
       return `#${issueId} handed back (${outcome.replace(/_/g, " ")}) — it's under Decide on Triage.`;
     },
   },
@@ -1620,7 +1656,7 @@ rl.on("line", async (line) => {
           capabilities: { tools: {} },
           // Keep in step with .claude-plugin/plugin.json — it drifted to
           // 0.5.0 once and made version reports useless for debugging.
-          serverInfo: { name: "prodigy", version: "0.20.0" },
+          serverInfo: { name: "prodigy", version: "0.21.0" },
         });
         break;
       case "notifications/initialized":

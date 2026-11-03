@@ -219,3 +219,23 @@ export function writeMarker(gitRoot, project) {
   writeFileSync(file, `${JSON.stringify({ project }, null, 2)}\n`);
   return file;
 }
+
+/**
+ * "owner/name" when the repo's origin is on GitHub, else null. Accepts the
+ * https, ssh and scp-like forms git clone leaves behind.
+ */
+export function githubRepo(gitRoot) {
+  if (!gitRoot) return null;
+  const url = git(gitRoot, "remote get-url origin");
+  if (!url) return null;
+  const m = url.match(/github\.com[:/]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i);
+  return m ? `${m[1]}/${m[2]}` : null;
+}
+
+/** Full SHA for a commit-ish the model passed, or null. The input is
+ *  checked against a hex pattern before it gets near a shell. */
+export function resolveCommit(gitRoot, ref) {
+  if (!gitRoot || typeof ref !== "string" || !/^[0-9a-f]{7,40}$/i.test(ref.trim())) return null;
+  const sha = git(gitRoot, `rev-parse --verify --quiet "${ref.trim()}^{commit}"`);
+  return sha && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+}
