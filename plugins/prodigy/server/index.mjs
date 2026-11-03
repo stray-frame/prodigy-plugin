@@ -32,9 +32,11 @@ import {
   git,
   githubRepo,
   loadRegistry,
+  markAskedToLink,
   normalizeKey,
   resolveCommit,
   resolveRepo,
+  unlinkedRepoPrompt,
   writeMarker,
 } from "../lib/studio-repo.mjs";
 
@@ -551,7 +553,25 @@ const TOOLS = [
       // The repo context may have resolved to "personal" purely because
       // there was no token to sync the registry with. Re-resolve.
       ctxPromise = null;
-      return `Connected as ${member} — Prodigy reports from this machine are now attributed to you. Takes effect immediately.`;
+      const done = `Connected as ${member} — Prodigy reports from this machine are now attributed to you. Takes effect immediately.`;
+      // Onboarding's next step: if the repo they're in isn't linked yet,
+      // ask now rather than leave it silently "personal".
+      try {
+        const ctx = await repoContext();
+        if (ctx.gitRoot && !ctx.studio) {
+          const registry = await loadRegistry({ url: API_URL, token });
+          const note = unlinkedRepoPrompt(ctx, registry?.projects);
+          if (note) {
+            markAskedToLink(ctx.gitRoot);
+            return `${done}
+
+${note}`;
+          }
+        }
+      } catch {
+        // the connection itself succeeded; the repo question is extra
+      }
+      return done;
     },
   },
   {
@@ -1656,7 +1676,7 @@ rl.on("line", async (line) => {
           capabilities: { tools: {} },
           // Keep in step with .claude-plugin/plugin.json — it drifted to
           // 0.5.0 once and made version reports useless for debugging.
-          serverInfo: { name: "prodigy", version: "0.21.0" },
+          serverInfo: { name: "prodigy", version: "0.22.0" },
         });
         break;
       case "notifications/initialized":

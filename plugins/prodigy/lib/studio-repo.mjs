@@ -239,3 +239,56 @@ export function resolveCommit(gitRoot, ref) {
   const sha = git(gitRoot, `rev-parse --verify --quiet "${ref.trim()}^{commit}"`);
   return sha && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
 }
+
+/* ------------------------------------------------- unlinked-repo prompt */
+
+/** Repos we've already asked about, keyed by git root. Local only: the
+ *  question is printed into this machine's session context and the answer
+ *  never leaves unless the member names a project (link_repo). */
+const ASKED_PATH = path.join(homedir(), ".prodigy", "asked-repos.json");
+
+function readAsked() {
+  try {
+    const a = readJson(ASKED_PATH);
+    return a && typeof a === "object" ? a : {};
+  } catch {
+    return {};
+  }
+}
+
+export function wasAskedToLink(gitRoot) {
+  return Boolean(readAsked()[gitRoot]);
+}
+
+export function markAskedToLink(gitRoot) {
+  try {
+    const asked = readAsked();
+    asked[gitRoot] = new Date().toISOString();
+    mkdirSync(path.dirname(ASKED_PATH), { recursive: true });
+    writeFileSync(ASKED_PATH, JSON.stringify(asked, null, 2));
+  } catch {
+    // worst case we ask once more next session
+  }
+}
+
+/**
+ * The context note that has the model ask which project an unlinked repo is
+ * for. Null when there's nothing to ask: not a git repo, already linked, or
+ * explicitly opted out with `enabled: false`.
+ *
+ * Nothing about the repo is sent to produce this: the roster comes from the
+ * same registry sync every session already does.
+ */
+export function unlinkedRepoPrompt(ctx, roster) {
+  if (!ctx?.gitRoot || ctx.studio) return null;
+  if (readMarker(ctx.gitRoot)?.enabled === false) return null;
+  const list = Array.isArray(roster) && roster.length ? roster.join(", ") : null;
+  return [
+    `Prodigy: this repo (${ctx.repo}) isn't linked to a studio project, so nothing from it is reported.`,
+    "Ask the member once, briefly, which project it's for" +
+      (list ? ` (${list})` : "") +
+      ", or whether it's personal. Don't hold up what they asked for; tack the question onto your first reply.",
+    "If they name a project, call link_repo with it. If it's personal or they don't say, do nothing. This question won't come up again for this repo.",
+    "",
+  ].join("\n");
+}

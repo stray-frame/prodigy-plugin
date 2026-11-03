@@ -19,7 +19,8 @@
  * reason cards reach the In-progress lane reliably: without it a session
  * starts blind to the board, and moving a card depends on the model choosing
  * to go looking for one. Nothing is printed for a personal repo, an empty
- * board, or an unreachable dashboard.
+ * board, or an unreachable dashboard. An unlinked git repo gets one local
+ * question per machine (which project is this?) and still sends nothing.
  */
 
 import { readFileSync } from "node:fs";
@@ -30,9 +31,13 @@ import {
   budget,
   closeConnections,
   git,
+  loadRegistry,
+  markAskedToLink,
   readJson,
   resolveRepo,
   stripBom,
+  unlinkedRepoPrompt,
+  wasAskedToLink,
 } from "../lib/studio-repo.mjs";
 
 const DEFAULT_URL = "https://prodigy.strayframe.net";
@@ -81,7 +86,25 @@ async function main() {
 
   // ---- opt-in gate: not a studio repo, no traffic ------------------------
   const ctx = await resolveRepo({ cwd, url, token });
-  if (!ctx.studio) return;
+  if (!ctx.studio) {
+    // An unlinked git repo: ask, once per repo on this machine, which
+    // project it's for. Printed into this session's context only; nothing
+    // is sent. Needs a token, since the roster comes from the registry.
+    if (
+      payload.hook_event_name === "SessionStart" &&
+      token &&
+      ctx.gitRoot &&
+      !wasAskedToLink(ctx.gitRoot)
+    ) {
+      const registry = await loadRegistry({ url, token });
+      const note = unlinkedRepoPrompt(ctx, registry?.projects);
+      if (note) {
+        process.stdout.write(note);
+        markAskedToLink(ctx.gitRoot);
+      }
+    }
+    return;
+  }
 
   // ---- gather metadata ---------------------------------------------------
   const body = {
