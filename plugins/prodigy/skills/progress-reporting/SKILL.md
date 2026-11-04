@@ -30,6 +30,20 @@ counts as studio work is the tools' call, not yours: they resolve it from a
   the pool, and a pool card that already describes the work should be
   started (`start_task` claims it), not duplicated.
 
+## Commits
+
+When a commit belongs to an open card, end its message with a trailer line:
+
+```
+Prodigy-Card: cc-1a2b3c4d
+```
+
+On repos connected to GitHub, this is how Prodigy links the commit and its pull
+request to the card, and shows the card as active. Nothing is guessed, so a
+commit without it stays unlinked. A branch or PR title naming the card works
+too. Commits never complete a card or award points, so `complete_task` is still
+needed when the work is done.
+
 ## Fixing the board
 
 The member owns their cards and can change their mind. These are for when

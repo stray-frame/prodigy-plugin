@@ -848,7 +848,7 @@ ${note}`;
       // session — including that nothing did. Pass it through rather than
       // re-deriving it, so the model never reports a clock-in that was
       // actually skipped.
-      return `Started: ${task.title} — ${claimed ? "claimed from the open pool and " : ""}the card moved to In progress.${clock?.message ? ` ${clock.message}` : ""}`;
+      return `Started: ${task.title} — ${claimed ? "claimed from the open pool and " : ""}the card moved to In progress.${clock?.message ? ` ${clock.message}` : ""} If you commit this work, end the commit message with the trailer \`Prodigy-Card: ${task.id}\`.`;
     },
   },
   {
@@ -1586,7 +1586,7 @@ ${note}`;
           clock = ` (The card ${issue.cardId} couldn't be started: ${said ?? err.message})`;
         }
       }
-      return `Fixing #${issue.id}: ${issue.title}${issue.cardId ? ` — card ${issue.cardId} is In progress.` : "."}${clock}`;
+      return `Fixing #${issue.id}: ${issue.title}${issue.cardId ? ` — card ${issue.cardId} is In progress.` : "."}${clock}${issue.ghIssueNumber ? ` Its GitHub issue is #${issue.ghIssueNumber}: put \`Fixes #${issue.ghIssueNumber}\` in the pull request body.` : ""}`;
     },
   },
   {
@@ -1676,7 +1676,7 @@ rl.on("line", async (line) => {
           capabilities: { tools: {} },
           // Keep in step with .claude-plugin/plugin.json — it drifted to
           // 0.5.0 once and made version reports useless for debugging.
-          serverInfo: { name: "prodigy", version: "0.23.0" },
+          serverInfo: { name: "prodigy", version: "0.24.0" },
         });
         break;
       case "notifications/initialized":

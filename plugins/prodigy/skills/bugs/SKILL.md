@@ -291,7 +291,9 @@ committed:
 2. With a yes, push the branch. If it already has an open PR into `main`
    (`gh pr list --head <branch> --base main`), the new commits join it.
    Otherwise open one with `gh pr create --base main`. List the fixed issues
-   in the body as `#<id> <title>`, one per line. Never put player text in it
+   in the body as `<id>: <title>`, one per line, without a `#` (on GitHub `#12`
+   would link its unrelated issue 12). Add `Fixes #<n>` for each one
+   `start_bug_fix` gave a GitHub issue number. Never put player text in it
    beyond the issue title.
 3. Leave merging to a person, through GitHub or by asking for it. A merged PR
    is what moves the fixes to publishable on Triage.
