@@ -126,7 +126,7 @@ async function main() {
   // has to cover one TIMEOUT_MS, not two, and the board fetch doesn't depend
   // on the event landing.
   const { signal, done } = budget();
-  const [, board, pool] = await Promise.all([
+  const [, board, pool, stuck] = await Promise.all([
     fetch(`${url}/api/cc/events`, {
       method: "POST",
       headers: {
@@ -142,6 +142,7 @@ async function main() {
     isStart && ctx.project
       ? fetchPool(url, token, ctx.project)
       : Promise.resolve(null),
+    isStart ? fetchStuck(url, token) : Promise.resolve(null),
   ]).finally(done);
 
   // SessionStart stdout is injected into the model's context. Without this
@@ -150,6 +151,10 @@ async function main() {
   // Printing them is what makes start_task happen reliably.
   if (isStart && (board?.length || pool?.length)) {
     process.stdout.write(renderBoard(board ?? [], pool ?? [], ctx.project));
+  }
+  if (isStart && stuck?.length) {
+    // renderBoard ends without a newline.
+    process.stdout.write(`\n${renderStuck(stuck)}\n`);
   }
 }
 
@@ -189,6 +194,41 @@ async function fetchPool(url, token, project) {
   } finally {
     done();
   }
+}
+
+/** The member's own work that has gone quiet or is waiting. Context only, so
+ *  any failure just means a session without it. */
+async function fetchStuck(url, token) {
+  const { signal, done } = budget();
+  try {
+    const res = await fetch(`${url}/api/cc/stuck?mine=1`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal,
+    });
+    if (!res.ok) return null;
+    const { items } = await res.json();
+    return Array.isArray(items) ? items : null;
+  } catch {
+    return null;
+  } finally {
+    done();
+  }
+}
+
+function renderStuck(items) {
+  const CAP = 5;
+  const shown = items.slice(0, CAP);
+  const hidden = items.length - shown.length;
+  return [
+    "Prodigy — your work that has gone quiet or is waiting:",
+    ...shown.map(
+      (i) => `  ${i.taskId ? `[${i.taskId}] ` : ""}${i.title} · ${i.project} · ${i.detail}`
+    ),
+    hidden > 0 ? `  (+${hidden} more)` : "",
+    "Mention these if the member asks what to work on, or if this session touches one.",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 /** Compact enough to be worth its context: this repo's project first, a few

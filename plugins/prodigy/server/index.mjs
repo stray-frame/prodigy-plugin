@@ -1676,7 +1676,7 @@ rl.on("line", async (line) => {
           capabilities: { tools: {} },
           // Keep in step with .claude-plugin/plugin.json — it drifted to
           // 0.5.0 once and made version reports useless for debugging.
-          serverInfo: { name: "prodigy", version: "0.22.0" },
+          serverInfo: { name: "prodigy", version: "0.23.0" },
         });
         break;
       case "notifications/initialized":
