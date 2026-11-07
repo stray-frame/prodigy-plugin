@@ -339,6 +339,10 @@ function bugFailure(err) {
     }
     case "assigned_to_other":
       return `This bug's card belongs to ${err.detail?.owner ?? "someone else"}, so it's theirs to fix. Leave it and take the next one (a manager can reassign it on the board).`;
+    case "fix_commit_required":
+      return `${err.detail?.repo ?? "This game's repo"} is where this game's code lives, so a fix needs its commit. This session isn't in a clone of it, or sent no commit. Commit the fix there, then call report_bug_outcome again from that clone with commit set to git rev-parse HEAD. Nothing was changed.`;
+    case "fix_wrong_repo":
+      return `This game ships from ${err.detail?.repo ?? "its own repo"}, and this clone's origin points somewhere else. Commit the fix in a clone of that repo and report it from there. Nothing was changed.`;
     case "invalid_batch":
       return null; // the caller formats the per-item detail
     default:
@@ -1676,7 +1680,7 @@ rl.on("line", async (line) => {
           capabilities: { tools: {} },
           // Keep in step with .claude-plugin/plugin.json — it drifted to
           // 0.5.0 once and made version reports useless for debugging.
-          serverInfo: { name: "prodigy", version: "0.24.0" },
+          serverInfo: { name: "prodigy", version: "0.24.1" },
         });
         break;
       case "notifications/initialized":

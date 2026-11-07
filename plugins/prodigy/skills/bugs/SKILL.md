@@ -297,6 +297,11 @@ committed:
    beyond the issue title.
 3. Leave merging to a person, through GitHub or by asking for it. A merged PR
    is what moves the fixes to publishable on Triage.
+4. **If you amend or rebase a reported fix, its SHA changes** and Triage would
+   wait forever on the old one. Call `report_bug_outcome` again with `fixed` and
+   the new `commit` (`git log --grep "Prodigy-Bug: #<id>"` finds it). This works
+   until the commit is merged. If the fix is being abandoned, a person sends it
+   back for a code check from the issue's page on Triage.
 
 
 ## Finish
