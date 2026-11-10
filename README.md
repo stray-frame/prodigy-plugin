@@ -54,6 +54,10 @@ Full docs, including troubleshooting, live on the dashboard:
   and matching task cards move on the board. Starting a card also clocks you
   into that project on Discord; finishing one sends its points to a manager
   for approval.
+- **Clock in and out from the prompt** — "clock me into 2PRT", or "finish
+  these and clock me out when you're done". Clocking out DMs you on Discord
+  that it happened, with Claude's short wrap of the session (what got done,
+  where to pick up). Claude never clocks you out unasked.
 - **Board fixes from the prompt** — rename a card, move it back to To do, or
   delete it (Claude confirms deletes first). New cards carry a story-point
   estimate and a discipline you can correct until the card is done; Done

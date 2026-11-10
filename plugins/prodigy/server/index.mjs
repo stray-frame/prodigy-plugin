@@ -856,6 +856,90 @@ ${note}`;
     },
   },
   {
+    name: "clock_in",
+    description:
+      "Clock the member into a studio project on Discord (starts their tracked work session, same as the Clock In button). Call when the member asks to be clocked in. `project` defaults to the project this repo is linked to. If they are already clocked into a DIFFERENT project nothing changes and the reply says so; pass switch: true only when the member has said to switch, since it ends the running session. start_task already clocks in on its own, so don't call this just because work began.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: {
+          type: "string",
+          description:
+            "Studio project name, e.g. '2PRT'. Omit to use this repo's project.",
+        },
+        switch: {
+          type: "boolean",
+          description:
+            "End a session running on another project and start one here. Only when the member asked to switch.",
+        },
+      },
+      additionalProperties: false,
+    },
+    async run({ project, switch: allowSwitch }) {
+      let target = String(project ?? "").trim();
+      if (!target) {
+        const ctx = await repoContext();
+        if (!ctx.studio || !ctx.project)
+          return "This repo isn't linked to a studio project, so there's no default to clock into. Ask the member which project, then call clock_in with its name. Nothing was changed.";
+        target = ctx.project;
+      }
+      const { clock } = await api("POST", "/api/cc/clock", {
+        action: "in",
+        project: target,
+        ...(allowSwitch === true ? { switch: true } : {}),
+      });
+      return clock.message;
+    },
+  },
+  {
+    name: "clock_out",
+    description:
+      "Clock the member out on Discord (ends their tracked work session) and DM them that it happened. Call ONLY when the member asked for it: 'clock me out', or 'clock me out when you're done' said earlier in the session. In the second case make it the very last step, after the work is finished and reported (report_progress / complete_task), and never before. Pass `summary`: the session wrap, which is sent to the member in that DM so they can read what happened while they were away. Never call this unprompted; ending someone's session stops their tracked time.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        summary: {
+          type: "string",
+          description:
+            "The wrap for the member's DM: what got done this session, anything left unfinished or blocked, and where to pick up. A few short lines of plain text (Discord markdown is fine), at most 2000 characters. No code, no secrets, no file contents.",
+        },
+      },
+      additionalProperties: false,
+    },
+    async run({ summary }) {
+      const wrap = String(summary ?? "").trim().slice(0, 2000);
+      const { clock } = await api("POST", "/api/cc/clock", {
+        action: "out",
+        ...(wrap ? { summary: wrap } : {}),
+      });
+      return clock.message;
+    },
+  },
+  {
+    name: "clock_status",
+    description:
+      "Check whether the member is clocked in on Discord right now, on which project, and since when. Call when they ask, or before clock_in / clock_out if it's unclear what state they're in.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    async run() {
+      let status;
+      try {
+        status = await api("GET", "/api/cc/clock");
+      } catch (err) {
+        if (err.code === "not_connected")
+          return "This Prodigy token isn't linked to a Discord account, so there's no clock to read. Minting a fresh token at the dashboard's /connect page fixes that.";
+        throw err;
+      }
+      if (!status.clockedIn) return "Not clocked in on Discord.";
+      const mins = Math.max(
+        0,
+        Math.round((Date.now() - new Date(status.since).getTime()) / 60000)
+      );
+      const ran =
+        mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
+      return `Clocked into ${status.project} on Discord for ${ran}.`;
+    },
+  },
+  {
     name: "edit_task",
     description:
       "Change the title and/or description of one of the member's existing cards. Call when they say a card is worded wrong, should read differently, or its description needs notes, steps or a checklist added, changed or removed. The description is REPLACED whole: read the current text from get_my_tasks first and send the full new version, keeping what the member didn't ask to change (Markdown, including `- [ ]` checklists, is kept as written). `description: \"\"` clears it. Re-scoped work is a new card, not an edit. Project, due date and skill classification are not editable here. A card that is already Done is frozen — finished cards are a record, so neither field can change.",
@@ -1680,7 +1764,7 @@ rl.on("line", async (line) => {
           capabilities: { tools: {} },
           // Keep in step with .claude-plugin/plugin.json — it drifted to
           // 0.5.0 once and made version reports useless for debugging.
-          serverInfo: { name: "prodigy", version: "0.24.1" },
+          serverInfo: { name: "prodigy", version: "0.25.0" },
         });
         break;
       case "notifications/initialized":
