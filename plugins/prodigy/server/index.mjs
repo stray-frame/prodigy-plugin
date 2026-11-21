@@ -532,6 +532,74 @@ function bugFailureOrThrow(err) {
 
 /* ------------------------------------------------------------- tools */
 
+/* ------------------------------------------------------ budget helpers */
+
+/** where each kind of money reads and writes on the dashboard */
+const BUDGET_KIND = {
+  spent: { url: "/api/budget/spend", extra: {}, label: "spent" },
+  planned: { url: "/api/budget/planned", extra: {}, label: "planned cost" },
+  in: { url: "/api/budget/income", extra: { expected: false }, label: "money in" },
+  expected: { url: "/api/budget/income", extra: { expected: true }, label: "expected income" },
+};
+
+const usd = (n) =>
+  `$${Number(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+
+/** A spoken line ("trailers") to a line id, the way assign_task matches a
+ *  name: exact id or label first, then a label that starts one line and
+ *  only one. A project's own lines are offered alongside the studio's. */
+function resolveLine(summary, project, text) {
+  const t = String(text ?? "").trim().toLowerCase();
+  if (!t) return null;
+  const p = String(project ?? "").toLowerCase();
+  const lines = (summary.lines ?? []).filter((l) => !l.project || l.project.toLowerCase() === p);
+  const exact = lines.find((l) => l.id.toLowerCase() === t || l.label.toLowerCase() === t);
+  if (exact) return exact.id;
+  const starts = lines.filter((l) => l.label.toLowerCase().startsWith(t));
+  return starts.length === 1 ? starts[0].id : null;
+}
+
+function lineNames(summary, project) {
+  const p = String(project ?? "").toLowerCase();
+  return (summary.lines ?? [])
+    .filter((l) => !l.project || l.project.toLowerCase() === p)
+    .map((l) => l.label)
+    .join(", ");
+}
+
+const INCOME_TYPES = ["Sponsorship", "Funding", "Sales", "Grant", "Other"];
+function resolveIncomeType(text) {
+  const t = String(text ?? "").trim().toLowerCase();
+  return INCOME_TYPES.find((x) => x.toLowerCase() === t) ?? null;
+}
+
+function resolvePerson(summary, text) {
+  const t = String(text ?? "").trim().toLowerCase();
+  const people = summary.people ?? [];
+  const exact = people.find((p) => p.name.toLowerCase() === t);
+  if (exact) return exact;
+  const starts = people.filter((p) => p.name.toLowerCase().startsWith(t));
+  return starts.length === 1 ? starts[0] : null;
+}
+
+/** The dashboard's refusals as sentences. Anything else is a real outage
+ *  and goes to the generic "unreachable" reply. */
+function budgetFailureOrThrow(err) {
+  if (err.status === 403)
+    return "The budget is for managers only (studio admin role on Discord, or the manager roster). Nothing was read or changed.";
+  if (err.status === 404) return "That entry or rule wasn't found — it may have been changed already. Call get_budget for current ids. Nothing was changed.";
+  if (err.status === 400) {
+    const why = {
+      unknown_project: "that project name isn't one of the studio's",
+      project_required: "money going out has to belong to a project",
+      month_required: "a yearly rule needs its month (1–12)",
+      bad_request: "one of the values was the wrong shape (dates are YYYY-MM-DD, amounts positive)",
+    }[err.code] ?? `the dashboard refused it (${err.code ?? "400"})`;
+    return `Not saved: ${why}. Nothing was changed.`;
+  }
+  throw err;
+}
+
 const TOOLS = [
   {
     name: "connect_account",
@@ -1729,6 +1797,369 @@ ${note}`;
       return `#${issueId} handed back (${outcome.replace(/_/g, " ")}) — it's under Decide on Triage.`;
     },
   },
+  /* ------------------------------------------------------------ budget
+   * The studio's money, for managers. Gated on the server by the same rule
+   * as the dashboard's /budget page (studio admin role or manager roster);
+   * a non-manager's token gets a 403 and a sentence, never data. Studio-
+   * wide rather than about this repo, so unlike the task tools these work
+   * from any directory and never read .prodigy.json. */
+  {
+    name: "get_budget",
+    description:
+      "Read the studio's money (managers only): all-time money in/out and cash on hand, this month's in/out/expected/coming-up and spending cap, Roblox earnings not yet cashed out, planned costs and expected income, upcoming repeating payments, the recent log, repeating rules, ownership shares, budget lines and per-project line budgets — with the ids every other budget tool needs. Call before answering any question about money, and before an edit or removal so you act on the right id. When you report figures, give dollars, and print the Robux beside them only where an entry carries `robux` (it moved in Robux); never convert dollars to Robux yourself.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        month: {
+          type: "string",
+          description: "YYYY-MM to read a month other than the current one.",
+        },
+      },
+      additionalProperties: false,
+    },
+    async run({ month }) {
+      try {
+        const q = month ? `?month=${encodeURIComponent(month)}` : "";
+        return `Studio budget (amounts in USD; robux only where money moved in Robux):\n${JSON.stringify(await api("GET", `/api/budget${q}`))}`;
+      } catch (err) {
+        return budgetFailureOrThrow(err);
+      }
+    },
+  },
+  {
+    name: "log_money",
+    description:
+      "Record money on the studio budget (managers only). kind: 'spent' (paid out), 'in' (received), 'planned' (a cost coming), 'expected' (income owed). Confirm amount, project and what-for with the member when anything is ambiguous; this writes to the shared ledger. Pass `robux` only when the money really moved in Robux (a group payout, a DevEx), using the exact Robux — never derived from dollars. `line` for money out is a budget line by name or id (from get_budget); for money in it's the type: Sponsorship, Funding, Sales, Grant or Other.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["spent", "in", "planned", "expected"] },
+        amount_usd: { type: "number", description: "Positive dollars." },
+        robux: { type: "integer", description: "Exact Robux, only if it moved in Robux." },
+        project: {
+          type: "string",
+          description: "Project name. Required for spent/planned; omit for studio-wide money in.",
+        },
+        line: { type: "string", description: "Budget line (out) or income type (in)." },
+        note: { type: "string", description: "What it was for / where it came from. ≤140 chars." },
+        date: { type: "string", description: "YYYY-MM-DD. Defaults to today (studio time)." },
+      },
+      required: ["kind", "amount_usd", "note"],
+      additionalProperties: false,
+    },
+    async run(args) {
+      try {
+        const summary = await api("GET", "/api/budget");
+        const out = args.kind === "spent" || args.kind === "planned";
+        if (out && !args.project) return "Money going out has to belong to a project. Ask which one. Nothing was recorded.";
+        let category = null;
+        if (args.line) {
+          category = out ? resolveLine(summary, args.project, args.line) : resolveIncomeType(args.line);
+          if (!category)
+            return `"${args.line}" isn't a ${out ? "budget line" : "income type (Sponsorship, Funding, Sales, Grant, Other)"}. ${out ? `Lines: ${lineNames(summary, args.project)}.` : ""} Nothing was recorded.`;
+        }
+        const { url, extra } = BUDGET_KIND[args.kind];
+        const { entry } = await api("POST", url, {
+          ...extra,
+          project: args.project ?? null,
+          amountUsd: args.amount_usd,
+          date: args.date ?? summary.today,
+          note: clip(args.note, 140),
+          category,
+          ...(args.robux ? { robux: args.robux } : {}),
+        });
+        return `Recorded ${BUDGET_KIND[args.kind].label}: ${usd(entry.amountUsd)}${entry.robux ? ` (R$ ${entry.robux.toLocaleString("en-US")})` : ""} — ${entry.note} · ${entry.project ?? "Studio"} · ${entry.date}. id ${entry.id}`;
+      } catch (err) {
+        return budgetFailureOrThrow(err);
+      }
+    },
+  },
+  {
+    name: "edit_money",
+    description:
+      "Correct an entry on the studio budget (managers only): amount, Robux, project, line, note or date. Get the id and kind from get_budget first. Only the fields you pass change; robux: 0 clears it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["spent", "in", "planned", "expected"] },
+        id: { type: "string" },
+        amount_usd: { type: "number" },
+        robux: { type: "integer" },
+        project: { type: "string" },
+        line: { type: "string" },
+        note: { type: "string" },
+        date: { type: "string", description: "YYYY-MM-DD" },
+      },
+      required: ["kind", "id"],
+      additionalProperties: false,
+    },
+    async run(args) {
+      try {
+        const out = args.kind === "spent" || args.kind === "planned";
+        let category;
+        if (args.line !== undefined) {
+          const summary = await api("GET", "/api/budget");
+          category = out ? resolveLine(summary, args.project, args.line) : resolveIncomeType(args.line);
+          if (!category) return `"${args.line}" isn't a ${out ? "budget line" : "income type"}. Nothing was changed.`;
+        }
+        const { url, extra } = BUDGET_KIND[args.kind];
+        const { entry } = await api("PATCH", url, {
+          ...extra,
+          id: args.id,
+          ...(args.amount_usd !== undefined ? { amountUsd: args.amount_usd } : {}),
+          ...(args.robux !== undefined ? { robux: args.robux || null } : {}),
+          ...(args.project !== undefined ? { project: args.project } : {}),
+          ...(category !== undefined ? { category } : {}),
+          ...(args.note !== undefined ? { note: clip(args.note, 140) } : {}),
+          ...(args.date !== undefined ? { date: args.date } : {}),
+        });
+        return `Updated: ${usd(entry.amountUsd)}${entry.robux ? ` (R$ ${entry.robux.toLocaleString("en-US")})` : ""} — ${entry.note} · ${entry.project ?? "Studio"} · ${entry.date}.`;
+      } catch (err) {
+        return budgetFailureOrThrow(err);
+      }
+    },
+  },
+  {
+    name: "remove_money",
+    description:
+      "Delete an entry from the studio budget (managers only) — for mistakes and duplicates, not for money that was refunded (log that as money in). Confirm with the member, naming the amount and note, before calling.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["spent", "in", "planned", "expected"] },
+        id: { type: "string" },
+      },
+      required: ["kind", "id"],
+      additionalProperties: false,
+    },
+    async run({ kind, id }) {
+      try {
+        const { url, extra } = BUDGET_KIND[kind];
+        await api("DELETE", url, { ...extra, id });
+        return `Removed that ${BUDGET_KIND[kind].label} entry.`;
+      } catch (err) {
+        return budgetFailureOrThrow(err);
+      }
+    },
+  },
+  {
+    name: "settle_money",
+    description:
+      "Mark a promise as having happened (managers only): a planned cost as paid, expected income as received, or one occurrence of a repeating rule (kind 'repeat', with the rule id and month from get_budget's upcomingRepeats). Pass amount_usd when the real amount differed from the estimate. Auto-pay rules book themselves; don't settle those.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["planned", "expected", "repeat"] },
+        id: { type: "string", description: "Entry id, or the rule id for 'repeat'." },
+        month: { type: "string", description: "YYYY-MM — required for 'repeat'." },
+        amount_usd: { type: "number", description: "What actually moved, if not the estimate." },
+      },
+      required: ["kind", "id"],
+      additionalProperties: false,
+    },
+    async run({ kind, id, month, amount_usd }) {
+      try {
+        if (kind === "repeat" && !month) return "Which month's occurrence? Pass month as YYYY-MM. Nothing was changed.";
+        const url = { planned: "/api/budget/planned/pay", expected: "/api/budget/income/receive", repeat: "/api/budget/recurring/pay" }[kind];
+        const r = await api("POST", url, {
+          id,
+          ...(kind === "repeat" ? { month } : {}),
+          ...(amount_usd !== undefined ? { amountUsd: amount_usd } : {}),
+        });
+        if (r.already) return "That occurrence was already booked. Nothing changed.";
+        return kind === "expected" ? "Marked received — it now counts as money in." : "Marked paid — it now counts as spent.";
+      } catch (err) {
+        return budgetFailureOrThrow(err);
+      }
+    },
+  },
+  {
+    name: "cash_out_roblox",
+    description:
+      "Record that a game's Roblox earnings were cashed out (managers only): writes the dollars that actually landed as money in and restarts that game's 'not cashed out' Robux count from the last day get_budget showed. Pass the real dollar amount from the DevEx or Payouts page.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: { type: "string", description: "The game, e.g. '2PRT'. Optional when only one game has earnings." },
+        amount_usd: { type: "number", description: "Dollars that actually landed." },
+      },
+      required: ["amount_usd"],
+      additionalProperties: false,
+    },
+    async run({ project, amount_usd }) {
+      try {
+        const summary = await api("GET", "/api/budget");
+        const lines = summary.roblox?.notCashedOut ?? [];
+        const line = project
+          ? lines.find((l) => l.project.toLowerCase() === String(project).toLowerCase())
+          : lines.length === 1 ? lines[0] : undefined;
+        if (!line)
+          return lines.length
+            ? `Which game? Earnings waiting: ${lines.map((l) => l.project).join(", ")}. Nothing was recorded.`
+            : "No Roblox earnings are waiting to be cashed out. Nothing was recorded.";
+        const r = await api("POST", "/api/budget/roblox/cashout", {
+          project: line.project,
+          through: line.throughDay,
+          amountUsd: amount_usd,
+          robux: line.robux,
+        });
+        if (r.already) return "That cash-out was already recorded.";
+        return `Recorded ${usd(amount_usd)} from ${line.project} as money in; earnings through ${line.throughDay} are counted as cashed out.`;
+      } catch (err) {
+        return budgetFailureOrThrow(err);
+      }
+    },
+  },
+  {
+    name: "set_repeating",
+    description:
+      "Create, change, stop, resume or delete a repeating payment on the studio budget (managers only) — rent, subscriptions, a contractor's regular Robux payout. action 'create' needs direction, amount_usd, note, day_of_month (1–28) and, for money out, project. auto_pay: true for money that moves by itself on its date (it then books itself; no one marks it paid). Pass robux for payouts made in Robux. 'stop' ends it from end_date (default today) and keeps its history; 'delete' is only for a rule created by mistake.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["create", "update", "stop", "resume", "delete"] },
+        id: { type: "string", description: "Rule id from get_budget (not for create)." },
+        direction: { type: "string", enum: ["out", "in"] },
+        cadence: { type: "string", enum: ["monthly", "yearly"], description: "Default monthly." },
+        day_of_month: { type: "integer" },
+        month: { type: "integer", description: "1–12, yearly only." },
+        amount_usd: { type: "number" },
+        robux: { type: "integer", description: "Exact Robux per occurrence; 0 clears." },
+        note: { type: "string" },
+        project: { type: "string" },
+        line: { type: "string", description: "Budget line for money out." },
+        start_date: { type: "string", description: "YYYY-MM-DD; default today. Nothing is owed before it." },
+        end_date: { type: "string", description: "YYYY-MM-DD for stop." },
+        auto_pay: { type: "boolean" },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    },
+    async run(a) {
+      try {
+        const summary = await api("GET", "/api/budget");
+        let category;
+        if (a.line !== undefined) {
+          category = resolveLine(summary, a.project, a.line);
+          if (!category) return `"${a.line}" isn't a budget line. Lines: ${lineNames(summary, a.project)}. Nothing was changed.`;
+        }
+        if (a.action === "create") {
+          for (const k of ["direction", "amount_usd", "note", "day_of_month"])
+            if (a[k] === undefined) return `Creating a repeating payment needs ${k}. Nothing was changed.`;
+          const { entry } = await api("POST", "/api/budget/recurring", {
+            direction: a.direction,
+            cadence: a.cadence ?? "monthly",
+            dayOfMonth: a.day_of_month,
+            ...(a.month ? { month: a.month } : {}),
+            amountUsd: a.amount_usd,
+            note: clip(a.note, 140),
+            project: a.project ?? null,
+            category: category ?? null,
+            startDate: a.start_date ?? summary.today,
+            ...(a.robux ? { robux: a.robux } : {}),
+            ...(a.auto_pay ? { autoPay: true } : {}),
+          });
+          return `Set up: ${entry.note}, ${usd(entry.amountUsd)}${entry.robux ? ` (R$ ${entry.robux.toLocaleString("en-US")})` : ""} on day ${entry.dayOfMonth} ${entry.cadence}${entry.autoPay ? ", booked automatically" : ""}, from ${entry.startDate}. id ${entry.id}`;
+        }
+        if (!a.id) return "Which rule? Pass its id from get_budget. Nothing was changed.";
+        if (a.action === "delete") {
+          await api("DELETE", "/api/budget/recurring", { id: a.id });
+          return "Deleted that repeating payment.";
+        }
+        const patch =
+          a.action === "stop" ? { endDate: a.end_date ?? summary.today }
+          : a.action === "resume" ? { endDate: null }
+          : {
+              ...(a.amount_usd !== undefined ? { amountUsd: a.amount_usd } : {}),
+              ...(a.note !== undefined ? { note: clip(a.note, 140) } : {}),
+              ...(a.day_of_month !== undefined ? { dayOfMonth: a.day_of_month } : {}),
+              ...(category !== undefined ? { category } : {}),
+              ...(a.robux !== undefined ? { robux: a.robux || null } : {}),
+              ...(a.auto_pay !== undefined ? { autoPay: a.auto_pay } : {}),
+              ...(a.end_date !== undefined ? { endDate: a.end_date } : {}),
+            };
+        const { entry } = await api("PATCH", "/api/budget/recurring", { id: a.id, ...patch });
+        return `${a.action === "stop" ? `Stopped from ${entry.endDate}` : a.action === "resume" ? "Resumed" : "Updated"}: ${entry.note}, ${usd(entry.amountUsd)}${entry.robux ? ` (R$ ${entry.robux.toLocaleString("en-US")})` : ""} on day ${entry.dayOfMonth}${entry.autoPay ? ", booked automatically" : ""}.`;
+      } catch (err) {
+        return budgetFailureOrThrow(err);
+      }
+    },
+  },
+  {
+    name: "set_ownership",
+    description:
+      "Give, change or remove someone's percentage share of a project (managers only). Whatever isn't given out is the studio's; shares can't add up past 100%. percent 0 removes the share. `person` is a name as the member said it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: { type: "string" },
+        person: { type: "string" },
+        percent: { type: "number" },
+      },
+      required: ["project", "person", "percent"],
+      additionalProperties: false,
+    },
+    async run({ project, person, percent }) {
+      try {
+        const summary = await api("GET", "/api/budget");
+        const who = resolvePerson(summary, person);
+        if (!who) return `Couldn't tell who "${person}" is. People: ${summary.people.map((p) => p.name).join(", ")}. Nothing was changed.`;
+        const r = await api("POST", "/api/budget/ownership", { project, discordId: who.discordId, percent: percent || null });
+        return percent
+          ? `${who.name} now holds ${percent}% of ${project}; ${r.remaining}% is still the studio's.`
+          : `Removed ${who.name}'s share of ${project}; ${r.remaining}% is the studio's.`;
+      } catch (err) {
+        if (err.status === 409) return `That would take ${project} past 100%. Lower someone else's share first. Nothing was changed.`;
+        return budgetFailureOrThrow(err);
+      }
+    },
+  },
+  {
+    name: "set_line_budget",
+    description:
+      "Set how much a project has set aside for one budget line, e.g. 'give 2PRT $1,000 for Ads' (managers only). amount_usd null clears it back to untracked; 0 is a real $0 budget. Lines come from get_budget.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: { type: "string" },
+        line: { type: "string" },
+        amount_usd: { type: ["number", "null"] },
+      },
+      required: ["project", "line", "amount_usd"],
+      additionalProperties: false,
+    },
+    async run({ project, line, amount_usd }) {
+      try {
+        const summary = await api("GET", "/api/budget");
+        const lineId = resolveLine(summary, project, line);
+        if (!lineId) return `"${line}" isn't a budget line. Lines: ${lineNames(summary, project)}. Nothing was changed.`;
+        await api("POST", "/api/budget/allocation", { project, lineId, amountUsd: amount_usd });
+        return amount_usd === null ? `Cleared ${project}'s ${line} budget.` : `${project} now has ${usd(amount_usd)} set aside for ${line}.`;
+      } catch (err) {
+        if (err.status === 409) return `That's more than ${project}'s budget has unallocated. Raise the project's budget or lower another line first. Nothing was changed.`;
+        return budgetFailureOrThrow(err);
+      }
+    },
+  },
+  {
+    name: "set_spending_cap",
+    description:
+      "Set the most the studio means to spend in a month (managers only); null removes the cap. It only colours this month's spending against it — income never raises it.",
+    inputSchema: {
+      type: "object",
+      properties: { amount_usd: { type: ["number", "null"] } },
+      required: ["amount_usd"],
+      additionalProperties: false,
+    },
+    async run({ amount_usd }) {
+      try {
+        await api("PATCH", "/api/budget", { financialMonthly: amount_usd });
+        return amount_usd === null ? "Removed the monthly spending cap." : `Monthly spending cap set to ${usd(amount_usd)}.`;
+      } catch (err) {
+        return budgetFailureOrThrow(err);
+      }
+    },
+  },
 ];
 
 /* ----------------------------------------------------- JSON-RPC loop */
@@ -1764,7 +2195,7 @@ rl.on("line", async (line) => {
           capabilities: { tools: {} },
           // Keep in step with .claude-plugin/plugin.json — it drifted to
           // 0.5.0 once and made version reports useless for debugging.
-          serverInfo: { name: "prodigy", version: "0.25.0" },
+          serverInfo: { name: "prodigy", version: "0.26.0" },
         });
         break;
       case "notifications/initialized":
